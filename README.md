@@ -36,6 +36,7 @@ Przed uruchomieniem skryptu utworz folder `C:\instalki\` i wgraj do niego nastep
 | `googlechromestandaloneenterprise64.msi` | Google Chrome Enterprise |
 | `Intel-Driver-and-Support-Assistant-Installer.exe` | Intel Driver & Support Assistant |
 | `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit PL |
+| `Reader_pl_install.exe` | Adobe Acrobat Reader PL |
 
 Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
 
@@ -45,13 +46,15 @@ Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
 
 ### Instalacja (nowy komputer firmowy)
 
-1. Skopiuj wszystkie pliki ze skryptami do dowolnego folderu (np. razem z `C:\instalki\`)
-2. Kliknij **prawym przyciskiem myszy** na `Uruchom-Setup.bat`
+1. Skopiuj wszystkie pliki skryptow do dowolnego folderu
+2. Kliknij **prawym przyciskiem myszy** na `Start-Firmowy.bat`
 3. Wybierz **"Uruchom jako administrator"**
+
+> Jezeli plik `.bat` zostanie uruchomiony bez uprawnien admina, automatycznie poprosi o ich nadanie przez UAC.
 
 ### Deinstalacja (reset maszyny testowej)
 
-1. Kliknij **prawym przyciskiem myszy** na `Uruchom-Deinstalator.bat`
+1. Kliknij **prawym przyciskiem myszy** na `Start-Deinstalator.bat`
 2. Wybierz **"Uruchom jako administrator"**
 
 > Nie uruchamiaj plikow `.ps1` bezposrednio — pliki `.bat` automatycznie ustawiaja wymagane uprawnienia i ExecutionPolicy.
@@ -71,23 +74,34 @@ Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
 - Ustawia wygaszenie ekranu i usypianie na **nigdy** (AC i DC)
 - Wylacza hibernacje
 
-### Krok 2 — Usuniecie starego Office
-- Automatycznie wykrywa i usuwa stare instalacje Microsoft Office (wersje 14/15/16, Microsoft 365)
-- Obsluguje instalacje MSI oraz Click-to-Run
-- Czyści pozostale foldery Office
+### Krok 2a — Usuniecie McAfee
+- Automatycznie wykrywa i usuwa McAfee Antivirus oraz McAfee WebAdvisor
+- Czyści pozostale foldery McAfee
+
+### Krok 2b — Usuniecie starego Office (metoda SaRA)
+- Wykrywa instalacje Microsoft Office (wersje 14/15/16, Microsoft 365, Click-to-Run)
+- Jezeli Office zostanie znaleziony — otwiera oficjalne narzedzie Microsoft do deinstalacji: **https://aka.ms/SaRA-officeUninstallFromPC**
+- Skrypt czeka na potwierdzenie (ENTER) przed kontynuowaniem
+
+> Uzywamy oficjalnej metody SaRA zamiast recznej deinstalacji, poniewaz gwarantuje ona pelne usuniecie bez pozostalosci.
 
 ### Krok 3 — Instalacja aplikacji
 
-| Aplikacja | Tryb |
-|-----------|------|
-| AnyDesk | Silent (bez okienek) |
-| ESET Endpoint Security | Silent (bez okienek) |
-| Google Chrome Enterprise | Silent (bez okienek) |
-| Intel Driver & Support Assistant | Silent (bez okienek) |
-| Microsoft Office 32-bit PL | Reczna (otwiera instalator) |
+| Aplikacja | Tryb | Plik |
+|-----------|------|------|
+| AnyDesk | Silent (bez okienek) | `AnyDesk.exe` |
+| ESET Endpoint Security | Silent (bez okienek) | `ees_nt64.msi` |
+| Google Chrome Enterprise | Silent (bez okienek) | `googlechromestandaloneenterprise64.msi` |
+| Intel Driver & Support Assistant | Silent (bez okienek) | `Intel-Driver-and-Support-Assistant-Installer.exe` |
+| Microsoft Office 32-bit PL | Reczna (otwiera instalator) | `OfficeSetup32bitPL.exe` |
+| Adobe Acrobat Reader PL | Reczna (otwiera instalator) | `Reader_pl_install.exe` |
+
+> **Uwaga — Office 32-bit na systemie 64-bit:** Skrypt wykrywa architekture systemu. Jezeli system jest 64-bitowy, wyswietli ostrzezenie i zapyta o potwierdzenie przed uruchomieniem instalatora 32-bit. Jezeli instalacja sie nie powiedzie, pobierz wersje 64-bit Office.
 
 ### Krok 4 — Przywrocenie ExecutionPolicy
-- Po zakonczeniu instalacji przywraca `ExecutionPolicy` do `Restricted`
+- Usuwa nadpisanie polityki na poziomie `Process` i `CurrentUser`
+- Przywraca `ExecutionPolicy` do `Restricted` na poziomie `LocalMachine`
+- Jezeli polityka jest zarzadzana przez GPO (domena) — blad jest ignorowany (normalne zachowanie)
 
 ---
 
@@ -95,9 +109,19 @@ Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
 
 Usuwa wszystkie aplikacje zainstalowane przez `Setup-Firmowy.ps1` i cofa ustawienia systemowe:
 
-- Odinstalowuje: AnyDesk, ESET, Google Chrome, Intel DSA, Microsoft Office
-- Cofa ustawienia zasilania do domyslnych Windows (ekran: 10 min, uśpienie: 30 min, hibernacja wlaczona)
-- Przywraca ExecutionPolicy do `Restricted`
+| Co usuwa | Metoda |
+|----------|--------|
+| AnyDesk | Przez wbudowany `--remove` lub rejestr |
+| ESET Endpoint Security | MSI silent uninstall |
+| Google Chrome | MSI silent uninstall + czyszczenie folderow |
+| Intel Driver & Support Assistant | Rejestr silent uninstall |
+| McAfee / McAfee WebAdvisor | Rejestr silent uninstall + czyszczenie folderow |
+| Microsoft Office | Oficjalne narzedzie SaRA (strona Microsoft) |
+| Adobe Acrobat Reader | Rejestr silent uninstall + czyszczenie folderow |
+
+Dodatkowo:
+- Cofa ustawienia zasilania do domyslnych Windows (ekran: 10 min AC / 5 min DC, uśpienie: 30 min AC / 15 min DC, hibernacja wlaczona, wygaszacz 10 min)
+- Przywraca ExecutionPolicy do `Restricted` (z tym samym zabezpieczeniem przed bledem GPO)
 
 ---
 
@@ -153,10 +177,19 @@ Set-ExecutionPolicy RemoteSigned -Scope LocalMachine
 Sprawdz czy nazwy plikow w folderze `C:\instalki\` sa identyczne jak w tabeli powyzej (wielkosc liter ma znaczenie).
 
 **ESET zwraca blad instalacji**
-Upewnij sie ze poprzednia wersja ESET zostala calkowicie odinstalowana przed uruchomieniem skryptu.
+Upewnij sie ze poprzednia wersja ESET lub inny antywirus zostal calkowicie odinstalowany przed uruchomieniem skryptu.
+
+**Office 32-bit nie instaluje sie na systemie 64-bit**
+Microsoft moze blokowac instalacje 32-bit na systemach 64-bit. W takim przypadku pobierz i uzyj instalatora 64-bit Office.
 
 **Office nie instaluje sie po usunieciu starego**
-Zrestartuj komputer po kroku deinstalacji i uruchom skrypt ponownie.
+Zrestartuj komputer po deinstalacji przez SaRA i uruchom skrypt ponownie.
+
+**Blad ExecutionPolicy na koncu skryptu**
+Jezeli widzisz komunikat o nadpisaniu przez GPO — to normalne w srodowisku domenowym. Skrypt ignoruje ten blad i kontynuuje.
+
+**McAfee nie zostal usuniety do konca**
+Niektore wersje McAfee wymagaja dedykowanego narzedzia MCPR (McAfee Consumer Product Removal). Pobierz je ze strony McAfee i uruchom recznie.
 
 ---
 
@@ -164,15 +197,13 @@ Zrestartuj komputer po kroku deinstalacji i uruchom skrypt ponownie.
 
 Skrypty sa dostepne do dowolnego uzytku w srodowiskach firmowych.
 
-
-
-Here is the English version of your documentation. I’ve refined the phrasing to sound professional yet accessible, ensuring it’s clear for any IT administrator.
+---
 
 ---
 
 # Corporate PC Provisioning Scripts
 
-A collection of PowerShell scripts designed for the automated setup of new corporate workstations and for resetting test machines to a clean state.
+A collection of PowerShell scripts for automated setup of new corporate workstations and for resetting test machines to a clean state.
 
 ---
 
@@ -180,37 +211,38 @@ A collection of PowerShell scripts designed for the automated setup of new corpo
 
 ```
 /
-├── Setup-Corporate.ps1      # Main installation script
-├── Uninstaller.ps1          # Script for cleaning up test machines
-├── Run-Setup.bat            # Launches Setup-Corporate.ps1 as Administrator
-├── Run-Uninstaller.bat      # Launches Uninstaller.ps1 as Administrator
-└── README.md                # Documentation
-
+├── files/
+│   ├── Setup-Firmowy.ps1         # Main installation script
+│   └── Deinstalator.ps1          # Script for cleaning up test machines
+├── Start-Firmowy.bat             # Launches Setup-Firmowy.ps1 as Administrator
+├── Start-Deinstalator.bat        # Launches Deinstalator.ps1 as Administrator
+└── README.md
 ```
 
 ---
 
 ## Requirements
 
-* **Windows 10 / Windows 11**
-* **Administrator** account privileges
-* A folder named `C:\installers\` containing the required installation files (see below)
+- Windows 10 / Windows 11
+- **Administrator** account privileges
+- A folder named `C:\instalki\` containing the required installation files (see below)
 
 ---
 
 ## Preparing the Installation Folder
 
-Before running the script, create the folder `C:\installers\` and place the following files inside:
+Before running the script, create the folder `C:\instalki\` and place the following files inside:
 
 | File Name | Application |
-| --- | --- |
+|-----------|-------------|
 | `AnyDesk.exe` | AnyDesk |
 | `ees_nt64.msi` | ESET Endpoint Security |
 | `googlechromestandaloneenterprise64.msi` | Google Chrome Enterprise |
 | `Intel-Driver-and-Support-Assistant-Installer.exe` | Intel Driver & Support Assistant |
 | `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit (Polish) |
+| `Reader_pl_install.exe` | Adobe Acrobat Reader (Polish) |
 
-> **Note:** File names must match the table exactly, as the script identifies them by name.
+> **Note:** File names must match the table exactly — the script identifies them by name.
 
 ---
 
@@ -218,130 +250,139 @@ Before running the script, create the folder `C:\installers\` and place the foll
 
 ### Installation (New Corporate PC)
 
-1. Copy all script files to any folder (e.g., alongside `C:\installers\`).
-2. **Right-click** on `Run-Setup.bat`.
+1. Copy all script files to any folder.
+2. **Right-click** `Start-Firmowy.bat`.
 3. Select **"Run as administrator"**.
+
+> If launched without admin rights, the `.bat` file will automatically prompt for elevation via UAC.
 
 ### Uninstallation (Test Machine Reset)
 
-1. **Right-click** on `Run-Uninstaller.bat`.
+1. **Right-click** `Start-Deinstalator.bat`.
 2. Select **"Run as administrator"**.
 
-> **Pro Tip:** Do not run the `.ps1` files directly. The `.bat` files automatically handle the necessary permissions and the `ExecutionPolicy` bypass for you.
+> Do not run `.ps1` files directly — the `.bat` files handle the required permissions and `ExecutionPolicy` bypass automatically.
 
 ---
 
-## What Setup-Corporate.ps1 Does
+## What Setup-Firmowy.ps1 Does
 
-### Step 0 — Computer Naming
-
-* Displays a dialog box showing the current computer name.
-* Allows you to enter a new name (max 15 characters, alphanumeric and hyphens only).
-* The name change takes effect after a reboot.
+### Step 0 — Computer Name
+- Displays a dialog with the current computer name.
+- Allows entry of a new name (max 15 characters, alphanumeric and hyphens only).
+- The name change takes effect after a reboot.
 
 ### Step 1 — Power Settings
+- Disables the screensaver.
+- Activates the **"High Performance"** power plan.
+- Sets screen timeout and sleep to **Never** (AC and DC).
+- Disables Hibernation.
 
-* Disables the screensaver.
-* Activates the **"High Performance"** power plan.
-* Sets screen timeout and sleep mode to **"Never"** (for both AC and Battery).
-* Disables Hibernation.
+### Step 2a — McAfee Removal
+- Detects and silently removes McAfee Antivirus and McAfee WebAdvisor.
+- Cleans up residual McAfee folders.
 
-### Step 2 — Legacy Office Removal
+### Step 2b — Legacy Office Removal (SaRA Method)
+- Detects Microsoft Office installations (versions 14/15/16, Microsoft 365, Click-to-Run).
+- If Office is found, opens Microsoft's official removal tool: **https://aka.ms/SaRA-officeUninstallFromPC**
+- The script waits for confirmation (ENTER) before continuing.
 
-* Automatically detects and removes old Microsoft Office installations (versions 14/15/16, and Microsoft 365).
-* Supports both MSI and Click-to-Run installations.
-* Cleans up residual Office folders.
+> The official SaRA tool is used instead of manual uninstallation to ensure complete removal without leftovers.
 
 ### Step 3 — Application Installation
 
-| Application | Mode |
-| --- | --- |
-| AnyDesk | Silent (Background) |
-| ESET Endpoint Security | Silent (Background) |
-| Google Chrome Enterprise | Silent (Background) |
-| Intel Driver & Support Assistant | Silent (Background) |
-| Microsoft Office 32-bit | Manual (Opens the installer UI) |
+| Application | Mode | File |
+|-------------|------|------|
+| AnyDesk | Silent (background) | `AnyDesk.exe` |
+| ESET Endpoint Security | Silent (background) | `ees_nt64.msi` |
+| Google Chrome Enterprise | Silent (background) | `googlechromestandaloneenterprise64.msi` |
+| Intel Driver & Support Assistant | Silent (background) | `Intel-Driver-and-Support-Assistant-Installer.exe` |
+| Microsoft Office 32-bit PL | Manual (opens installer UI) | `OfficeSetup32bitPL.exe` |
+| Adobe Acrobat Reader PL | Manual (opens installer UI) | `Reader_pl_install.exe` |
+
+> **Office 32-bit on a 64-bit OS:** The script detects system architecture. On a 64-bit OS it will display a warning and ask for confirmation before launching the 32-bit installer. If installation fails, use the 64-bit Office installer instead.
 
 ### Step 4 — Security Cleanup
-
-* Restores the system `ExecutionPolicy` to `Restricted` once the process is complete.
+- Removes `ExecutionPolicy` overrides at the `Process` and `CurrentUser` scopes.
+- Restores `ExecutionPolicy` to `Restricted` at the `LocalMachine` scope.
+- If policy is managed by GPO (domain environment), the error is safely ignored.
 
 ---
 
-## What Uninstaller.ps1 Does
+## What Deinstalator.ps1 Does
 
-This script reverts the changes made by the setup script:
+Removes all applications installed by `Setup-Firmowy.ps1` and reverts system settings:
 
-* **Uninstalls:** AnyDesk, ESET, Google Chrome, Intel DSA, and Microsoft Office.
-* **Resets Power Settings:** Returns to Windows defaults (Screen: 10 min, Sleep: 30 min, Hibernation enabled).
-* **Restores Security:** Resets `ExecutionPolicy` to `Restricted`.
+| What it removes | Method |
+|-----------------|--------|
+| AnyDesk | Built-in `--remove` flag or registry |
+| ESET Endpoint Security | MSI silent uninstall |
+| Google Chrome | MSI silent uninstall + folder cleanup |
+| Intel Driver & Support Assistant | Registry silent uninstall |
+| McAfee / McAfee WebAdvisor | Registry silent uninstall + folder cleanup |
+| Microsoft Office | Official SaRA tool (Microsoft website) |
+| Adobe Acrobat Reader | Registry silent uninstall + folder cleanup |
+
+Additionally:
+- Resets power settings to Windows defaults (screen: 10 min AC / 5 min DC, sleep: 30 min AC / 15 min DC, hibernation enabled, screensaver: 10 min).
+- Restores `ExecutionPolicy` to `Restricted` (with the same GPO-safe error handling).
 
 ---
 
 ## Adding New Applications
 
-In `Setup-Corporate.ps1`, locate the section marked:
-
-```powershell
-# >> ADD ADDITIONAL APPLICATIONS HERE <<
+In `Setup-Firmowy.ps1`, find the section marked:
 
 ```
+>> DODAJ KOLEJNE APLIKACJE TUTAJ <<
+```
 
-### Examples:
-
-**Silent .exe (e.g., 7-Zip)**
+Examples:
 
 ```powershell
+# Silent .exe (e.g. 7-Zip)
 Install-App -Name "7-Zip" -File "7z2301-x64.exe" -SilentArgs "/S" -Silent $true
 
-```
-
-**Silent .msi**
-
-```powershell
+# Silent .msi
 $msi = Join-Path $InstallerPath "program.msi"
 Start-Process "msiexec.exe" -ArgumentList "/qn /i `"$msi`" /norestart" -Wait
 
-```
-
-**Manual Installation**
-
-```powershell
+# Manual installation
 Install-App -Name "Custom Program" -File "setup.exe" -Silent $false
-
 ```
 
 ---
 
 ## ESET License Activation
 
-To automate ESET activation, find the ESET section in the script and update the arguments:
+Find the ESET section in the script and update the arguments:
 
 **Find:**
-
 ```powershell
 -ArgumentList "/qn /i `"$esetMsi`" ADDLOCAL=ALL REBOOT_WHEN_NEEDED=0"
-
 ```
 
-**Change to:**
-
+**Replace with:**
 ```powershell
 -ArgumentList "/qn /i `"$esetMsi`" ADDLOCAL=ALL REBOOT_WHEN_NEEDED=0 ACTIVATION_DATA=key:AAAA-BBBB-CCCC-DDDD-EEEE"
-
 ```
 
 ---
 
 ## Troubleshooting
 
-* **Script won't run:** Ensure you are using the `.bat` file. If issues persist, open PowerShell as Admin and run: `Set-ExecutionPolicy RemoteSigned -Scope LocalMachine`.
-* **Installer not found:** Double-check that files in `C:\installers\` match the names in the script exactly.
-* **ESET installation error:** Ensure any previous antivirus software (including older ESET versions) is fully removed before running the script.
-* **Office installation fails:** If you just removed an old version of Office, a reboot is often required before the new one can be installed.
+| Problem | Solution |
+|---------|----------|
+| Script won't run | Use the `.bat` file, not `.ps1` directly. If it still fails, run PowerShell as Admin and execute: `Set-ExecutionPolicy RemoteSigned -Scope LocalMachine` |
+| Installer not found | Verify file names in `C:\instalki\` match the table exactly (case-sensitive). |
+| ESET installation error | Ensure all previous antivirus software is fully removed before running the script. |
+| Office 32-bit blocked on 64-bit OS | Microsoft may block 32-bit installs on 64-bit systems. Download and use the 64-bit Office installer. |
+| Office won't install after removal | Reboot after the SaRA uninstall completes, then run the script again. |
+| ExecutionPolicy error at the end | If you see a GPO override message, this is normal in domain environments — the script handles it safely. |
+| McAfee not fully removed | Some McAfee versions require the dedicated MCPR tool. Download it from the McAfee website and run it manually. |
 
 ---
 
 ## License
 
-These scripts are provided for free use within corporate environments. Use responsibly!
+These scripts are provided for free use within corporate environments. Use responsibly.
