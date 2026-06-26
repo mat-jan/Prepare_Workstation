@@ -8,10 +8,13 @@ Zestaw skryptow PowerShell do automatycznego przygotowania nowego komputera w sr
 
 ```
 /
-├── Setup-Firmowy.ps1       # Glowny skrypt instalacyjny
-├── Deinstalator.ps1        # Skrypt do czyszczenia maszyny testowej
-├── Uruchom-Setup.bat       # Uruchamia Setup-Firmowy.ps1 jako Administrator
-├── Uruchom-Deinstalator.bat# Uruchamia Deinstalator.ps1 jako Administrator
+├──script/
+│  ├── Uruchom-Setup.bat        # Uruchamia Setup-Firmowy.ps1 jako Administrator
+│  ├── Uruchom-Deinstalator.bat        # Uruchamia Deinstalator.ps1 jako Administrator
+│  └── files/
+│      ├── Setup-Firmowy.ps1       # Glowny skrypt instalacyjny
+│      └── Deinstalator.ps1        # Skrypt do czyszczenia maszyny testowej
+├── LICENSE
 └── README.md
 ```
 
