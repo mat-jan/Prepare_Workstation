@@ -222,9 +222,23 @@ foreach ($folder in $adobeFolders) {
         Write-OK "Usunieto folder: $folder"
     }
 }
-
 # ============================================================
-#  8. COFNIECIE USTAWIEN ZASILANIA
+#  8. URBACKUP CLIENT
+# ============================================================
+Uninstall-ByName -Pattern "UrBackup" -DisplayLabel "UrBackup Client"
+
+$urbackupFolders = @(
+    "C:\Program Files\UrBackup",
+    "C:\Program Files (x86)\UrBackup"
+)
+foreach ($folder in $urbackupFolders) {
+    if (Test-Path $folder) {
+        Remove-Item $folder -Recurse -Force -ErrorAction SilentlyContinue
+        Write-OK "Usunieto folder: $folder"
+    }
+}
+# ============================================================
+#  9. COFNIECIE USTAWIEN ZASILANIA
 # ============================================================
 Write-Step "Cofanie ustawien zasilania do domyslnych"
 
@@ -250,7 +264,7 @@ powercfg /hibernate on
 Write-OK "Hibernacja: przywrocona"
 
 # ============================================================
-#  9. PRZYWROCENIE EXECUTION POLICY
+#  10. PRZYWROCENIE EXECUTION POLICY
 # ============================================================
 Write-Step "Przywracanie ExecutionPolicy"
 
