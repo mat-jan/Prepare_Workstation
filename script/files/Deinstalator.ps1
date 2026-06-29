@@ -19,7 +19,7 @@ Write-Host ""
 Write-Host "============================================" -ForegroundColor Red
 Write-Host "  DEINSTALATOR - MASZYNA TESTOWA" -ForegroundColor Red
 Write-Host "  Usuwa: AnyDesk, ESET, Chrome, Intel DSA," -ForegroundColor Red
-Write-Host "         Office, McAfee, Adobe Reader" -ForegroundColor Red
+Write-Host "         Office, McAfee, Adobe Reader, UrBackup" -ForegroundColor Red
 Write-Host "         oraz cofa ustawienia systemu" -ForegroundColor Red
 Write-Host "============================================" -ForegroundColor Red
 Write-Host ""

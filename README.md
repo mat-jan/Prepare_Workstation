@@ -30,8 +30,6 @@ Zestaw skryptow PowerShell do automatycznego przygotowania nowego komputera w sr
 
 ## Przygotowanie folderu z instalatorami
 
-### Opcja A — lokalny folder (pendrive / kopiowanie reczne)
-
 Utworz folder `C:\instalki\` i wgraj do niego nastepujace pliki:
 
 | Plik | Aplikacja |
@@ -45,25 +43,6 @@ Utworz folder `C:\instalki\` i wgraj do niego nastepujace pliki:
 | `UrBackup_Client.msi` | UrBackup Client |
 
 Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
-
-### Opcja B — udział sieciowy (zalecane, bez pendrive)
-
-Wrzuc instalatory na serwer/NAS i zmien jedna linijke na poczatku `Setup-Firmowy.ps1`:
-
-```powershell
-$InstallerPath = "\\nazwaservera\instalki"
-```
-
-Komputer musi byc podlaczony do sieci firmowej i miec dostep do udzialu. Nie trzeba nic kopiowac lokalnie — skrypt zaciagnie pliki bezposrednio po sieci.
-
-### Pobieranie Adobe Acrobat Reader (offline installer)
-
-Zwykly instalator ze strony Adobe to web downloader — nie dziala silent install. Pobierz pelny offline installer:
-
-1. Wejdz na: **https://get.adobe.com/reader/enterprise/**
-2. Wybierz: Windows / Polish / najnowsza wersja
-3. Kliknij "Download Now"
-4. Zapisz plik jako `AdobeReader_PL.exe` do folderu z instalatorami
 
 ---
 
@@ -265,7 +244,6 @@ A collection of PowerShell scripts for automated setup of new corporate workstat
 
 ## Preparing the Installation Folder
 
-### Option A — Local folder (USB drive / manual copy)
 
 Create the folder `C:\instalki\` and place the following files inside:
 
@@ -281,24 +259,6 @@ Create the folder `C:\instalki\` and place the following files inside:
 
 > **Note:** File names must match the table exactly — the script identifies them by name.
 
-### Option B — Network share (recommended, no USB required)
-
-Place the installers on a server or NAS and change one line at the top of `Setup-Firmowy.ps1`:
-
-```powershell
-$InstallerPath = "\\servername\instalki"
-```
-
-The machine must be connected to the corporate network and have read access to the share. No local copying needed — the script pulls files directly over the network.
-
-### Downloading Adobe Acrobat Reader (offline installer)
-
-The standard Adobe download is a web installer and does not support silent installation. Download the full offline installer instead:
-
-1. Go to: **https://get.adobe.com/reader/enterprise/**
-2. Select: Windows / Polish / latest version
-3. Click "Download Now"
-4. Save the file as `AdobeReader_PL.exe` to your installers folder
 
 ---
 
