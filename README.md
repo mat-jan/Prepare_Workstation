@@ -32,15 +32,17 @@ Zestaw skryptow PowerShell do automatycznego przygotowania nowego komputera w sr
 
 Utworz folder `C:\instalki\` i wgraj do niego nastepujace pliki:
 
-| Plik | Aplikacja |
-|------|-----------|
-| `AnyDesk.exe` | AnyDesk |
-| `ees_nt64.msi` | ESET Endpoint Security |
-| `googlechromestandaloneenterprise64.msi` | Google Chrome Enterprise |
-| `Intel-Driver-and-Support-Assistant-Installer.exe` | Intel Driver & Support Assistant |
-| `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit PL |
-| `AdobeReader_PL.exe` | Adobe Acrobat Reader PL (offline installer) |
-| `UrBackup_Client.msi` | UrBackup Client |
+| Plik | Aplikacja | Link do pobrania |
+|------|-----------|-------------------|
+| `AnyDesk.exe` | AnyDesk | https://anydesk.com/en/downloads/windows |
+| `ees_nt64.msi` | ESET Endpoint Security | https://www.eset.com/int/business/download/endpoint-security/ |
+| `googlechromestandaloneenterprise64.msi` | Google Chrome Enterprise | https://enterprise.google.com/chrome/chrome-browser/ |
+| `Intel-Driver-and-Support-Assistant-Installer.exe` | Intel Driver & Support Assistant | https://www.intel.com/content/www/us/en/support/detect.html |
+| `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit PL | https://www.microsoft.com/pl-pl/microsoft-365/get-started-with-office-2021 |
+| `AdobeReader_PL.exe` | Adobe Acrobat Reader PL (offline installer) | https://get.adobe.com/reader/enterprise/ |
+| `UrBackup_Client.exe` | UrBackup Client (x86/x64) (10/11 + Server editions) | https://hndl.urbackup.org/Client/2.5.32/UrBackup%20Client%202.5.32.exe |
+
+> Aktualna lista wszystkich wersji/instalatorow UrBackup (rowniez wariant bez ikony w zasobniku i osobny instalator MSI x64) znajduje sie na oficjalnej stronie pobierania: https://www.urbackup.org/download.html
 
 Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
 
@@ -99,9 +101,11 @@ Nazwy plikow musza byc dokladnie takie jak powyzej (skrypt szuka ich po nazwie).
 | Intel Driver & Support Assistant | Silent (bez okienek) | `Intel-Driver-and-Support-Assistant-Installer.exe` |
 | Microsoft Office 32-bit PL | Reczna (otwiera instalator) | `OfficeSetup32bitPL.exe` |
 | Adobe Acrobat Reader PL | Silent (bez okienek) | `AdobeReader_PL.exe` |
-| UrBackup Client | Silent (bez okienek) | `UrBackup_Client.msi` |
+| UrBackup Client 2.5.32 | Silent (bez okienek), flaga `/S` | `UrBackup_Client.exe` |
 
 > **Uwaga — Office 32-bit na systemie 64-bit:** Skrypt wykrywa architekture systemu. Jezeli system jest 64-bitowy, wyswietli ostrzezenie i zapyta o potwierdzenie przed uruchomieniem instalatora 32-bit. Jezeli instalacja sie nie powiedzie, pobierz wersje 64-bit Office.
+
+> **Uwaga — UrBackup:** od tej wersji skryptu uzywany jest uniwersalny instalator EXE `UrBackup Client 2.5.32.exe` (x86/x64, z ikona w zasobniku), instalowany cicho parametrem `/S`, zamiast poprzedniego pliku `UrBackup_Client.msi` (MSI x64-only).
 
 ### Krok 4 — Przywrocenie ExecutionPolicy
 - Usuwa nadpisanie polityki na poziomie `Process` i `CurrentUser`
@@ -123,11 +127,13 @@ Usuwa wszystkie aplikacje zainstalowane przez `Setup-Firmowy.ps1` i cofa ustawie
 | McAfee / McAfee WebAdvisor | Rejestr silent uninstall + czyszczenie folderow |
 | Microsoft Office | Oficjalne narzedzie SaRA (strona Microsoft) |
 | Adobe Acrobat Reader | Rejestr silent uninstall + czyszczenie folderow |
-| UrBackup Client | Rejestr silent uninstall + czyszczenie folderow |
+| UrBackup Client | Rejestr silent uninstall (uninstall.exe `/S`) + czyszczenie folderow |
 
 Dodatkowo:
 - Cofa ustawienia zasilania do domyslnych Windows (ekran: 10 min AC / 5 min DC, uśpienie: 30 min AC / 15 min DC, hibernacja wlaczona, wygaszacz 10 min)
 - Przywraca ExecutionPolicy do `Restricted` (z tym samym zabezpieczeniem przed bledem GPO)
+
+> **Uwaga — UrBackup:** wpis deinstalacyjny UrBackup Client 2.5.32 w rejestrze wskazuje na wlasny `uninstall.exe` (instalator NSIS), a nie na `msiexec`. Funkcja `Uninstall-ByName` w `Deinstalator.ps1` automatycznie to rozpoznaje i uruchamia deinstalator z flagami cichego trybu (`/S /silent /quiet /norestart`) — nie jest wymagana zadna dodatkowa zmiana konfiguracji.
 
 ---
 
@@ -180,7 +186,7 @@ Set-ExecutionPolicy RemoteSigned -Scope LocalMachine
 ```
 
 **Nie znaleziono pliku instalatora**
-Sprawdz czy nazwy plikow w folderze z instalatorami sa identyczne jak w tabeli powyzej (wielkosc liter ma znaczenie).
+Sprawdz czy nazwy plikow w folderze z instalatorami sa identyczne jak w tabeli powyzej (wielkosc liter ma znaczenie). W przypadku UrBackup plik musi nazywac sie dokladnie `UrBackup Client 2.5.32.exe` (ze spacjami).
 
 **Brak dostepu do udzialu sieciowego**
 Upewnij sie ze komputer jest podlaczony do sieci firmowej i ma uprawnienia do odczytu udzialu. Mozesz sprawdzic dostep w PowerShell: `Test-Path \\nazwaservera\instalki`
@@ -202,6 +208,9 @@ Jezeli widzisz komunikat o nadpisaniu przez GPO — to normalne w srodowisku dom
 
 **McAfee nie zostal usuniety do konca**
 Niektore wersje McAfee wymagaja dedykowanego narzedzia MCPR (McAfee Consumer Product Removal). Pobierz je ze strony McAfee i uruchom recznie.
+
+**UrBackup Client nie instaluje sie / nie odinstalowuje cicho**
+Upewnij sie ze uzywasz instalatora EXE (nie MSI) o dokladnej nazwie `UrBackup Client 2.5.32.exe`, pobranego z https://hndl.urbackup.org/Client/2.5.32/UrBackup%20Client%202.5.32.exe. Starsze pliki `UrBackup_Client.msi` nie sa juz obslugiwane przez `Setup-Firmowy.ps1` — jesli musisz uzywac MSI (np. z powodu polityk GPO wymuszajacych pakiety MSI), pobierz `UrBackup Client 2.5.32(x64).msi` i przywroc blok `msiexec` w skrypcie.
 
 ---
 
@@ -244,21 +253,21 @@ A collection of PowerShell scripts for automated setup of new corporate workstat
 
 ## Preparing the Installation Folder
 
-
 Create the folder `C:\instalki\` and place the following files inside:
 
-| File Name | Application |
-|-----------|-------------|
-| `AnyDesk.exe` | AnyDesk |
-| `ees_nt64.msi` | ESET Endpoint Security |
-| `googlechromestandaloneenterprise64.msi` | Google Chrome Enterprise |
-| `Intel-Driver-and-Support-Assistant-Installer.exe` | Intel Driver & Support Assistant |
-| `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit (Polish) |
-| `AdobeReader_PL.exe` | Adobe Acrobat Reader PL (offline installer) |
-| `UrBackup_Client.msi` | UrBackup Client |
+| File Name | Application | Download link |
+|-----------|-------------|----------------|
+| `AnyDesk.exe` | AnyDesk | https://anydesk.com/en/downloads/windows |
+| `ees_nt64.msi` | ESET Endpoint Security | https://www.eset.com/int/business/download/endpoint-security/ |
+| `googlechromestandaloneenterprise64.msi` | Google Chrome Enterprise | https://enterprise.google.com/chrome/chrome-browser/ |
+| `Intel-Driver-and-Support-Assistant-Installer.exe` | Intel Driver & Support Assistant | https://www.intel.com/content/www/us/en/support/detect.html |
+| `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit (Polish) | https://www.microsoft.com/pl-pl/microsoft-365/get-started-with-office-2021 |
+| `AdobeReader_PL.exe` | Adobe Acrobat Reader PL (offline installer) | https://get.adobe.com/reader/enterprise/ |
+| `UrBackup_Client.exe` | UrBackup Client (x86/x64) (10/11 + Server editions) | https://hndl.urbackup.org/Client/2.5.32/UrBackup%20Client%202.5.32.exe |
+
+> The full, always-current list of UrBackup client builds (including the no-tray-icon variant and the standalone x64 MSI installer) is available on the official download page: https://www.urbackup.org/download.html
 
 > **Note:** File names must match the table exactly — the script identifies them by name.
-
 
 ---
 
@@ -315,9 +324,11 @@ Create the folder `C:\instalki\` and place the following files inside:
 | Intel Driver & Support Assistant | Silent (background) | `Intel-Driver-and-Support-Assistant-Installer.exe` |
 | Microsoft Office 32-bit PL | Manual (opens installer UI) | `OfficeSetup32bitPL.exe` |
 | Adobe Acrobat Reader PL | Silent (background) | `AdobeReader_PL.exe` |
-| UrBackup Client | Silent (background) | `UrBackup_Client.msi` |
+| UrBackup Client | Silent (background), `/S` flag | `UrBackup Client 2.5.32.exe` |
 
 > **Office 32-bit on a 64-bit OS:** The script detects system architecture. On a 64-bit OS it will display a warning and ask for confirmation before launching the 32-bit installer. If installation fails, use the 64-bit Office installer instead.
+
+> **UrBackup:** as of this version, the script uses the universal EXE installer `UrBackup Client 2.5.32.exe` (x86/x64, with tray icon), installed silently via the `/S` flag, replacing the previous `UrBackup_Client.msi` file (x64-only MSI).
 
 ### Step 4 — Security Cleanup
 - Removes `ExecutionPolicy` overrides at the `Process` and `CurrentUser` scopes.
@@ -339,11 +350,13 @@ Removes all applications installed by `Setup-Firmowy.ps1` and reverts system set
 | McAfee / McAfee WebAdvisor | Registry silent uninstall + folder cleanup |
 | Microsoft Office | Official SaRA tool (Microsoft website) |
 | Adobe Acrobat Reader | Registry silent uninstall + folder cleanup |
-| UrBackup Client | Registry silent uninstall + folder cleanup |
+| UrBackup Client | Registry silent uninstall (`uninstall.exe /S`) + folder cleanup |
 
 Additionally:
 - Resets power settings to Windows defaults (screen: 10 min AC / 5 min DC, sleep: 30 min AC / 15 min DC, hibernation enabled, screensaver: 10 min).
 - Restores `ExecutionPolicy` to `Restricted` (with the same GPO-safe error handling).
+
+> **UrBackup:** the registry uninstall entry for UrBackup Client 2.5.32 points to its own NSIS `uninstall.exe` rather than `msiexec`. The `Uninstall-ByName` helper in `Deinstalator.ps1` detects this automatically and runs the uninstaller with silent flags (`/S /silent /quiet /norestart`) — no extra configuration is required.
 
 ---
 
@@ -392,7 +405,7 @@ Find the ESET section in the script and update the arguments:
 | Problem | Solution |
 |---------|----------|
 | Script won't run | Use the `.bat` file, not `.ps1` directly. If it still fails, run PowerShell as Admin and execute: `Set-ExecutionPolicy RemoteSigned -Scope LocalMachine` |
-| Installer not found | Verify file names in the installers folder match the table exactly (case-sensitive). |
+| Installer not found | Verify file names in the installers folder match the table exactly (case-sensitive). For UrBackup the file must be named exactly `UrBackup Client 2.5.32.exe` (with spaces). |
 | No access to network share | Ensure the machine is connected to the corporate network and has read access to the share. You can test it in PowerShell: `Test-Path \\servername\instalki` |
 | ESET installation error | Ensure all previous antivirus software is fully removed before running the script. |
 | Adobe won't install silently | Make sure you have the offline installer from **https://get.adobe.com/reader/enterprise/** — the standard Adobe download is a web installer and does not support silent install. |
@@ -400,6 +413,7 @@ Find the ESET section in the script and update the arguments:
 | Office won't install after removal | Reboot after the SaRA uninstall completes, then run the script again. |
 | ExecutionPolicy error at the end | If you see a GPO override message, this is normal in domain environments — the script handles it safely. |
 | McAfee not fully removed | Some McAfee versions require the dedicated MCPR tool. Download it from the McAfee website and run it manually. |
+| UrBackup Client won't install/uninstall silently | Confirm you're using the EXE installer (not MSI), named exactly `UrBackup Client 2.5.32.exe`, downloaded from https://hndl.urbackup.org/Client/2.5.32/UrBackup%20Client%202.5.32.exe. The old `UrBackup_Client.msi` file is no longer used by `Setup-Firmowy.ps1` — if you must use MSI (e.g. due to GPO policies requiring MSI packages), download `UrBackup Client 2.5.32(x64).msi` and restore the `msiexec` block in the script. |
 
 ---
 

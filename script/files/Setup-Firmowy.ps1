@@ -281,21 +281,11 @@ Install-App -Name "Adobe Acrobat Reader PL" `
             -SilentArgs "/sAll /rs /msi /qn /norestart EULA_ACCEPT=YES" `
             -Silent $true
 
-# UrBackup Client - silent przez msiexec
-$urbackupMsi = Join-Path $InstallerPath "UrBackup_Client.msi"
-if (Test-Path $urbackupMsi) {
-    Write-Step "Instalacja: UrBackup Client"
-    $proc = Start-Process -FilePath "msiexec.exe" `
-        -ArgumentList "/qn /i `"$urbackupMsi`" /norestart" `
-        -Wait -PassThru
-    if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-        Write-OK "UrBackup Client zainstalowany (kod: $($proc.ExitCode))"
-    } else {
-        Write-Err "UrBackup Client - kod wyjscia: $($proc.ExitCode)"
-    }
-} else {
-    Write-Skip "UrBackup Client - plik nie znaleziony: UrBackup_Client.msi"
-}
+# UrBackup Client (x86/x64) - silent (instalator EXE, wspiera x86 i x64)
+Install-App -Name "UrBackup Client" `
+            -File "UrBackup_Client.exe" `
+            -SilentArgs "/S" `
+            -Silent $true
 # ============================================================
 #  >> DODAJ KOLEJNE APLIKACJE TUTAJ <<
 #
