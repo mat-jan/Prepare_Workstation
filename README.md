@@ -55,12 +55,25 @@ Folder `files\` musi leżeć obok `Start-Firmowy.bat` (nie przenoś plików osob
 | Zasilanie | Plan Wysoka wydajność (jeśli go nie ma na sprzęcie — tworzony z szablonu), ekran/uśpienie = nigdy, hibernacja off, wygaszacz off |
 | Czyszczenie przed instalacją | Usunięcie McAfee (Antivirus, WebAdvisor + foldery) oraz starego Office oficjalnym narzędziem SaRA |
 | Dodatkowe ustawienia | Punkt przywracania systemu, strefa czasowa + synchronizacja czasu, widoczne rozszerzenia plików i ukryte pliki, ikona „Ten komputer” na pulpicie |
-| Opcje instalacji | Pomijanie już zainstalowanych aplikacji, opcjonalny klucz aktywacyjny ESET |
-| Na koniec | Przywrócenie ExecutionPolicy (Restricted), otwarcie Windows Update |
+| Opcje instalacji | Pomijanie już zainstalowanych aplikacji, **weryfikacja w rejestrze po instalacji**, **sprawdzanie sum SHA256** instalatorów, opcjonalny klucz aktywacyjny ESET |
+| Dodatkowe funkcje | Wyłączenie reklam i sugestii (Start, ekran blokady), usunięcie zbędnych aplikacji Windows, region i język pl-PL, skróty na pulpicie, strona startowa Chrome |
+| Sprzątanie | Czyszczenie plików tymczasowych i koszyka, usunięcie zainstalowanych instalatorów z lokalnego folderu, kopia logu na pendrive |
+| Na koniec | Instalacja aktualizacji Windows, otwarcie Windows Update, przywrócenie ExecutionPolicy (Restricted) |
+
+#### Szczegóły dodatkowych funkcji
+
+- **Reklamy i sugestie** — wyłącza „sugerowane aplikacje” w Start, reklamy na ekranie blokady, identyfikator reklamowy i automatyczną instalację aplikacji promowanych (ustawienia bieżącego użytkownika).
+- **Zbędne aplikacje Windows** (domyślnie wyłączone) — usuwa m.in. Xbox, Solitaire, Bing News/Pogoda, Skype, Clipchamp, Teams (konsumencki), Zune, 3D Builder, Mixed Reality, gry promowane (Candy Crush itp.). Nie rusza Sklepu, Kalkulatora, Zdjęć ani Notatnika.
+- **Region i język** (domyślnie wyłączone) — format pl-PL, lokalizacja Polska, klawiatura polska programisty. Zastępuje listę języków użytkownika; pełny efekt po restarcie.
+- **Skróty na pulpicie** — dla wszystkich użytkowników: Chrome, Word, Excel, Outlook, Adobe Reader (tylko dla programów, które są zainstalowane).
+- **Chrome** (domyślnie wyłączone) — ustawia stronę startową przez zasady Chrome Enterprise w rejestrze (Chrome pokaże „zarządzane przez organizację”).
+- **Aktualizacje Windows** (domyślnie wyłączone) — wyszukuje, pobiera i instaluje aktualizacje przez wbudowane API Windows Update (bez dodatkowych modułów). Może trwać długo; nie da się go przerwać w trakcie.
+- **Sprzątanie instalatorów** — usuwa tylko te pliki, które zostały zainstalowane w tym uruchomieniu, i tylko z lokalnego dysku (nigdy z pendrive'a ani udziału sieciowego).
+- **Kopia logu** — zapisuje log w `PrepareWorkstation-logs\` na pendrive (najpierw na tym, z którego użyto instalatorów).
 
 ### Zakładka „Aplikacje”
 
-Lista z `apps.json`. Dla każdej pozycji widać: czy plik instalatora jest w folderze, czy aplikacja jest już zainstalowana i w jakim trybie się instaluje. Pozycje bez pliku są wyszarzone i odznaczone. Przyciski: zaznacz/odznacz wszystkie, odśwież, **Edytuj apps.json**.
+Lista z `apps.json`. Dla każdej pozycji widać: czy plik instalatora jest w folderze, czy aplikacja jest już zainstalowana i w jakim trybie się instaluje. Pozycje bez pliku są wyszarzone i odznaczone. Przyciski: zaznacz/odznacz wszystkie, odśwież, **Edytuj apps.json**, **Zapisz sumy SHA256**.
 
 **Instalatory z pendrive'a — bez kopiowania do `C:\instalki`:**
 
@@ -129,6 +142,11 @@ Nie trzeba już edytować skryptu. Dopisz obiekt do `script\files\apps.json` (al
 | `detect` | wyrażenie regularne dopasowywane do nazwy w „Programy i funkcje” — służy do pomijania już zainstalowanych |
 | `default` | czy zaznaczać domyślnie |
 | `warn32on64` | (opcjonalnie) ostrzeżenie dla instalatora 32-bit na systemie 64-bit |
+| `sha256` | (opcjonalnie) suma kontrolna instalatora — patrz niżej |
+
+### Sumy SHA256 instalatorów
+
+Kliknij **Zapisz sumy SHA256** w zakładce Aplikacje (przy sprawdzonych, zaufanych plikach) — program zapisze ich sumy do `apps.json`. Od tej pory, przy włączonej opcji „Sprawdzaj sumy SHA256”, odmówi instalacji pliku o innej sumie (uszkodzony, podmieniony albo nowsza wersja — wtedy zapisz sumy ponownie). Aplikacje bez sumy instalują się jak dotąd.
 
 ---
 

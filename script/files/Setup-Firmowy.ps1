@@ -30,6 +30,7 @@ $LogFile   = Join-Path $LogDir ("setup-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 
 $script:Results      = New-Object System.Collections.ArrayList
 $script:Catalog      = @()
+$script:InstalledNow  = @()   # aplikacje zainstalowane w tym uruchomieniu
 $script:FileOverrides = @{}   # nazwa pliku (male litery) -> pelna sciezka dodana recznie / z pendrive
 $script:Opts         = @{}
 $script:DryRun       = $false
@@ -256,6 +257,16 @@ function Step-App {
     }
     if (Test-Dry $name "instalacja ($($App.type)) z $($App.file)") { return }
 
+    if ($o.Hash -and $App.sha256) {
+        Write-Log "Sprawdzam sumę SHA256: $($App.file)..."
+        $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        if ($actual -ne ([string]$App.sha256)) {
+            Set-Outcome $name "ERR" "suma SHA256 nie zgadza się (plik zmieniony lub inna wersja) - pominięto instalację"
+            return
+        }
+        Write-Log "Suma SHA256 zgodna" "OK"
+    }
+
     $code = $null
     switch ($App.type) {
         'msi' {
@@ -276,6 +287,7 @@ function Step-App {
             }
             Write-Log "Otwieram instalator $name (instalacja ręczna) - dokończ ją w otwartym oknie..."
             $code = Invoke-External $path ""
+            $script:InstalledNow += $App
             Set-Outcome $name "OK" "instalator zamknięty (kod: $code)"
             return
         }
@@ -284,6 +296,7 @@ function Step-App {
 
     if ($code -eq 0 -or $code -eq 3010 -or $code -eq 1641) {
         if ($code -ne 0) { $script:RebootNeeded = $true }
+        $script:InstalledNow += $App
         Set-Outcome $name "OK" "zainstalowano (kod: $code)"
     } else {
         Set-Outcome $name "ERR" "kod wyjścia: $code"
@@ -336,6 +349,267 @@ function Step-WindowsUpdate {
 # ============================================================
 #  URUCHOMIENIE KREATORA
 # ============================================================
+# ------------------------------------------------------------
+#  Dodatkowe funkcje
+# ------------------------------------------------------------
+function Step-Ads {
+    if (Test-Dry "Reklamy i sugestie" "wyłączenie w Start/ekranie blokady") { return }
+    $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+    if (-not (Test-Path $cdm)) { New-Item -Path $cdm -Force | Out-Null }
+    foreach ($n in 'SubscribedContent-338387Enabled', 'SubscribedContent-338388Enabled', 'SubscribedContent-338389Enabled',
+                   'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled', 'SubscribedContent-338393Enabled',
+                   'SubscribedContent-310093Enabled', 'SystemPaneSuggestionsEnabled', 'SoftLandingEnabled',
+                   'RotatingLockScreenOverlayEnabled', 'OemPreInstalledAppsEnabled', 'PreInstalledAppsEnabled',
+                   'SilentInstalledAppsEnabled', 'ContentDeliveryAllowed') {
+        Set-ItemProperty -Path $cdm -Name $n -Value 0 -Type DWord -Force
+    }
+    $adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo"
+    if (-not (Test-Path $adv)) { New-Item -Path $adv -Force | Out-Null }
+    Set-ItemProperty -Path $adv -Name "Enabled" -Value 0 -Type DWord -Force
+    Set-Outcome "Reklamy i sugestie" "OK" "wyłączone (Start, ekran blokady, identyfikator reklamowy)"
+}
+
+function Step-Debloat {
+    $names = @(
+        'Microsoft.BingNews', 'Microsoft.BingWeather', 'Microsoft.GetHelp', 'Microsoft.Getstarted',
+        'Microsoft.MicrosoftSolitaireCollection', 'Microsoft.MicrosoftOfficeHub', 'Microsoft.WindowsFeedbackHub',
+        'Microsoft.ZuneMusic', 'Microsoft.ZuneVideo', 'Microsoft.People', 'Microsoft.SkypeApp',
+        'Microsoft.XboxApp', 'Microsoft.XboxGamingOverlay', 'Microsoft.Xbox.TV.App', 'Microsoft.MixedReality.Portal',
+        'Microsoft.3DBuilder', 'Microsoft.Microsoft3DViewer', 'Microsoft.Print3D', 'Microsoft.WindowsMaps',
+        'Clipchamp.Clipchamp', 'MicrosoftTeams', '*CandyCrush*', 'SpotifyAB.SpotifyMusic', 'Disney.*', 'king.com.*'
+    )
+    if (Test-Dry "Zbędne aplikacje Windows" "do usunięcia (jeśli są): $($names.Count) wzorców") { return }
+
+    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
+    $removed = 0
+    foreach ($n in $names) {
+        foreach ($p in @(Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue)) {
+            try { Remove-AppxPackage -Package $p.PackageFullName -AllUsers -ErrorAction Stop; $removed++; Write-Log "Usunięto: $($p.Name)" "INFO" } catch { }
+        }
+        foreach ($pp in @($provisioned | Where-Object { $_.DisplayName -like $n })) {
+            try { Remove-AppxProvisionedPackage -Online -PackageName $pp.PackageName -ErrorAction Stop | Out-Null } catch { }
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    Set-Outcome "Zbędne aplikacje Windows" "OK" "usunięto pakietów: $removed"
+}
+
+function Step-Language {
+    if (Test-Dry "Region i język" "pl-PL, klawiatura polska programisty") { return }
+    Set-Culture -CultureInfo pl-PL
+    Set-WinHomeLocation -GeoId 191
+    Set-WinSystemLocale -SystemLocale pl-PL
+    $list = New-WinUserLanguageList -Language "pl-PL"
+    $list[0].InputMethodTips.Clear()
+    $list[0].InputMethodTips.Add("0415:00000415")
+    Set-WinUserLanguageList -LanguageList $list -Force
+    $script:RebootNeeded = $true
+    Set-Outcome "Region i język" "OK" "pl-PL, klawiatura polska programisty (pełny efekt po restarcie)"
+}
+
+function Step-Shortcuts {
+    if (Test-Dry "Skróty na pulpicie" "Chrome, Word, Excel, Outlook, Adobe Reader") { return }
+    $pf  = $env:ProgramFiles
+    $pf86 = ${env:ProgramFiles(x86)}
+    $targets = @(
+        @{ Name = "Google Chrome";  Paths = @("$pf\Google\Chrome\Application\chrome.exe", "$pf86\Google\Chrome\Application\chrome.exe") },
+        @{ Name = "Word";           Paths = @("$pf\Microsoft Office\root\Office16\WINWORD.EXE", "$pf86\Microsoft Office\root\Office16\WINWORD.EXE") },
+        @{ Name = "Excel";          Paths = @("$pf\Microsoft Office\root\Office16\EXCEL.EXE", "$pf86\Microsoft Office\root\Office16\EXCEL.EXE") },
+        @{ Name = "Outlook";        Paths = @("$pf\Microsoft Office\root\Office16\OUTLOOK.EXE", "$pf86\Microsoft Office\root\Office16\OUTLOOK.EXE") },
+        @{ Name = "Adobe Acrobat Reader"; Paths = @("$pf\Adobe\Acrobat DC\Acrobat\Acrobat.exe", "$pf86\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe", "$pf\Adobe\Acrobat Reader DC\Reader\AcroRd32.exe") }
+    )
+    $desktop = Join-Path $env:Public "Desktop"
+    $shell = New-Object -ComObject WScript.Shell
+    $made = @()
+    foreach ($t in $targets) {
+        $exe = $t.Paths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (-not $exe) { continue }
+        $lnk = $shell.CreateShortcut((Join-Path $desktop "$($t.Name).lnk"))
+        $lnk.TargetPath = $exe
+        $lnk.WorkingDirectory = Split-Path $exe -Parent
+        $lnk.Save()
+        $made += $t.Name
+    }
+    if ($made.Count -gt 0) { Set-Outcome "Skróty na pulpicie" "OK" ($made -join ", ") }
+    else { Set-Outcome "Skróty na pulpicie" "SKIP" "nie znaleziono zainstalowanych programów" }
+}
+
+function Step-ChromePolicy {
+    $url = $script:Opts.ChromeUrl
+    if (Test-Dry "Chrome - strona startowa" $url) { return }
+    $k = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+    New-Item -Path $k -Force | Out-Null
+    Set-ItemProperty -Path $k -Name "HomepageLocation"        -Value $url -Type String -Force
+    Set-ItemProperty -Path $k -Name "HomepageIsNewTabPage"    -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $k -Name "ShowHomeButton"          -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path $k -Name "RestoreOnStartup"        -Value 4 -Type DWord -Force
+    Set-ItemProperty -Path $k -Name "PromotionalTabsEnabled"  -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $k -Name "MetricsReportingEnabled" -Value 0 -Type DWord -Force
+    New-Item -Path "$k\RestoreOnStartupURLs" -Force | Out-Null
+    Set-ItemProperty -Path "$k\RestoreOnStartupURLs" -Name "1" -Value $url -Type String -Force
+    Set-Outcome "Chrome - strona startowa" "OK" "$url (Chrome pokaże «zarządzane przez organizację»)"
+}
+
+# Pobiera i instaluje aktualizacje przez wbudowane API Windows Update (bez dodatkowych modułow).
+# Praca w osobnym watku, zeby okno nie zawieszalo sie na czas wyszukiwania i instalacji.
+function Step-WindowsUpdateInstall {
+    if (Test-Dry "Aktualizacje Windows" "wyszukanie i instalacja") { return }
+    Write-Log "Szukam i instaluję aktualizacje Windows - to może potrwać kilka do kilkunastu minut (nie można przerwać w trakcie)..."
+
+    $sb = {
+        $out = @{ Found = 0; Installed = 0; Failed = 0; Titles = @(); Reboot = $false; Error = $null }
+        try {
+            $session  = New-Object -ComObject Microsoft.Update.Session
+            $searcher = $session.CreateUpdateSearcher()
+            $found    = $searcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
+            $coll     = New-Object -ComObject Microsoft.Update.UpdateColl
+            foreach ($u in $found.Updates) {
+                if ($u.InstallationBehavior.CanRequestUserInput) { continue }
+                if (-not $u.EulaAccepted) { $u.AcceptEula() }
+                [void]$coll.Add($u)
+                $out.Titles += $u.Title
+            }
+            $out.Found = $coll.Count
+            if ($coll.Count -gt 0) {
+                $dl = $session.CreateUpdateDownloader(); $dl.Updates = $coll; [void]$dl.Download()
+                $inst = $session.CreateUpdateInstaller(); $inst.Updates = $coll
+                $r = $inst.Install()
+                $out.Reboot = [bool]$r.RebootRequired
+                for ($i = 0; $i -lt $coll.Count; $i++) {
+                    if ($r.GetUpdateResult($i).ResultCode -eq 2) { $out.Installed++ } else { $out.Failed++ }
+                }
+            }
+        } catch { $out.Error = $_.Exception.Message }
+        $out
+    }
+
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($sb)
+    $async = $ps.BeginInvoke()
+    $t0 = Get-Date
+    while (-not $async.IsCompleted) {
+        [System.Windows.Forms.Application]::DoEvents()
+        Start-Sleep -Milliseconds 200
+        $lblStatus.Text = ("Aktualizacje Windows: trwa... ({0:mm\:ss})" -f ((Get-Date) - $t0))
+    }
+    $res = $ps.EndInvoke($async)
+    $ps.Dispose()
+    $r = if ($res.Count -gt 0) { $res[$res.Count - 1].BaseObject } else { $null }
+
+    if (-not $r)       { Set-Outcome "Aktualizacje Windows" "ERR" "brak wyniku z Windows Update"; return }
+    if ($r.Error)      { Set-Outcome "Aktualizacje Windows" "ERR" $r.Error; return }
+    foreach ($t in $r.Titles) { Write-Log $t "INFO" }
+    if ($r.Found -eq 0) { Set-Outcome "Aktualizacje Windows" "OK" "brak nowych aktualizacji"; return }
+    if ($r.Reboot) { $script:RebootNeeded = $true }
+    if ($r.Failed -gt 0) { Set-Outcome "Aktualizacje Windows" "ERR" "zainstalowano $($r.Installed) z $($r.Found), błędy: $($r.Failed)" }
+    else                 { Set-Outcome "Aktualizacje Windows" "OK" "zainstalowano $($r.Installed) z $($r.Found)" }
+}
+
+function Step-CleanTemp {
+    if (Test-Dry "Sprzątanie" "pliki tymczasowe i koszyk") { return }
+    foreach ($d in @($env:TEMP, "$env:WINDIR\Temp")) {
+        foreach ($i in @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue)) {
+            try { Remove-Item -LiteralPath $i.FullName -Recurse -Force -ErrorAction Stop } catch { }
+        }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    try { Clear-RecycleBin -Force -ErrorAction Stop } catch { }
+    Set-Outcome "Sprzątanie" "OK" "wyczyszczono pliki tymczasowe i koszyk"
+}
+
+# Usuwa tylko te instalatory, ktore zostaly zainstalowane w tym uruchomieniu - i tylko z lokalnego dysku
+function Step-CleanInstallers {
+    $folder = $script:Opts.InstallerPath
+    if (Test-Dry "Sprzątanie instalatorów" "usunięcie zainstalowanych plików z $folder") { return }
+    if ($folder -like '\\*') { Set-Outcome "Sprzątanie instalatorów" "SKIP" "udział sieciowy - nie usuwam"; return }
+    try {
+        $di = New-Object System.IO.DriveInfo([System.IO.Path]::GetPathRoot($folder))
+        if ($di.DriveType -ne 'Fixed') { Set-Outcome "Sprzątanie instalatorów" "SKIP" "to nie dysk lokalny - nie usuwam"; return }
+    } catch { Set-Outcome "Sprzątanie instalatorów" "SKIP" "nie można ustalić typu dysku"; return }
+
+    $n = 0
+    foreach ($a in @($script:InstalledNow)) {
+        $p = Join-Path $folder $a.file
+        if (Test-Path -LiteralPath $p) {
+            try { Remove-Item -LiteralPath $p -Force -ErrorAction Stop; $n++ } catch { Write-Log "Nie można usunąć: $p" "SKIP" }
+        }
+    }
+    Set-Outcome "Sprzątanie instalatorów" "OK" "usunięto plików: $n"
+}
+
+# Sprawdza w rejestrze, czy zainstalowane programy faktycznie sie pojawily
+function Step-Verify {
+    if (Test-Dry "Weryfikacja instalacji" "sprawdzenie w rejestrze") { return }
+    $apps = @($script:InstalledNow)
+    if ($apps.Count -eq 0) { Set-Outcome "Weryfikacja instalacji" "SKIP" "nic nie zainstalowano w tym uruchomieniu"; return }
+    $inst = @(Get-InstalledApps)
+    foreach ($a in $apps) {
+        if (-not $a.detect) { continue }
+        $hit = $inst | Where-Object { $_.DisplayName -match $a.detect } | Select-Object -First 1
+        if ($hit)                     { Set-Outcome "Weryfikacja: $($a.name)" "OK" "wykryta: $($hit.DisplayName) $($hit.DisplayVersion)" }
+        elseif ($a.type -eq 'manual') { Set-Outcome "Weryfikacja: $($a.name)" "SKIP" "nie wykryto - dokończ instalację ręcznie" }
+        else                          { Set-Outcome "Weryfikacja: $($a.name)" "ERR" "instalator zakończył pracę, ale programu nie ma w rejestrze" }
+    }
+}
+
+# Kopiuje log na pendrive (najpierw ten, z ktorego pochodza instalatory)
+function Copy-LogToUsb {
+    $roots = @([System.IO.DriveInfo]::GetDrives() |
+        Where-Object { $_.DriveType -eq 'Removable' -and $_.IsReady } |
+        ForEach-Object { $_.RootDirectory.FullName })
+    if ($roots.Count -eq 0) { Write-Log "Kopia logu: nie wykryto pendrive'a" "SKIP"; return }
+
+    $target = $roots[0]
+    foreach ($p in $script:FileOverrides.Values) {
+        $r = [System.IO.Path]::GetPathRoot($p)
+        if ($roots -contains $r) { $target = $r; break }
+    }
+    try {
+        $dir = Join-Path $target "PrepareWorkstation-logs"
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $pc = if ($script:Opts.NewName) { $script:Opts.NewName } else { $env:COMPUTERNAME }
+        $dest = Join-Path $dir ("{0}-{1:yyyyMMdd-HHmmss}.log" -f $pc, (Get-Date))
+        Copy-Item -LiteralPath $LogFile -Destination $dest -Force
+        Write-Log "Log skopiowano na pendrive: $dest" "OK"
+    } catch {
+        Write-Log "Kopia logu nie powiodła się: $($_.Exception.Message)" "ERR"
+    }
+}
+
+# Zapisuje sumy SHA256 obecnych instalatorow do apps.json
+function Save-Hashes {
+    $folder = $txtPath.Text.Trim()
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    $n = 0
+    try {
+        foreach ($a in $script:Catalog) {
+            $p = Resolve-Installer $a.file $folder
+            if (Test-Path -LiteralPath $p) {
+                $h = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower()
+                Add-Member -InputObject $a -NotePropertyName sha256 -NotePropertyValue $h -Force
+                $n++
+            }
+        }
+    } finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
+
+    if ($n -eq 0) {
+        [void](Show-Msg "Nie znaleziono żadnych plików instalatorów do policzenia sum." "Sumy SHA256" "OK" "Information")
+        return
+    }
+    $r = Show-Msg ("Policzono sumy SHA256 dla $n instalatorów.`n`nZapisać je do apps.json? Od tej pory (przy włączonej opcji sprawdzania) " +
+                   "program odmówi instalacji pliku o innej sumie - np. nowszej wersji. Wtedy trzeba ponownie kliknąć ten przycisk.") `
+                  "Sumy SHA256" "YesNo" "Question"
+    if ($r -ne 'Yes') { return }
+    try {
+        $json = ConvertTo-Json -InputObject @($script:Catalog) -Depth 5
+        [System.IO.File]::WriteAllText($AppsFile, $json, (New-Object System.Text.UTF8Encoding($true)))
+        Write-Log "Zapisano sumy SHA256 ($n) do $AppsFile" "OK"
+        Update-AppList $false $true
+    } catch {
+        [void](Show-Msg "Nie udało się zapisać apps.json:`n$($_.Exception.Message)" "Sumy SHA256" "OK" "Error")
+    }
+}
+
 function Show-Summary {
     $ok   = @($script:Results | Where-Object Status -eq 'OK').Count
     $skip = @($script:Results | Where-Object Status -eq 'SKIP').Count
@@ -347,6 +621,7 @@ function Show-Summary {
     Write-Log "OK: $ok   Pominięte: $skip   Błędy: $err   Symulacja: $dry" "INFO"
     foreach ($r in ($script:Results | Where-Object Status -eq 'ERR')) { Write-Log "$($r.Step): $($r.Detail)" "ERR" }
     Write-Log "Log zapisano: $LogFile" "INFO"
+    if ($script:Opts.CopyLog -and -not $script:DryRun) { Copy-LogToUsb }
 
     $text = "Gotowe.`n`nOK: $ok`nPominięte: $skip`nBłędy: $err"
     if ($dry -gt 0) { $text = "Tryb testowy - nic nie zostało zmienione.`n`nKroków w symulacji: $dry" }
@@ -369,6 +644,11 @@ function Start-Setup {
         return
     }
 
+    if ($chkChrome.Checked -and $txtChrome.Text.Trim() -notmatch '^https?://\S+$') {
+        [void](Show-Msg "Adres strony startowej Chrome musi zaczynać się od http:// lub https://" "Błąd" "OK" "Warning")
+        return
+    }
+
     $o = @{}
     $o.InstallerPath = $txtPath.Text.Trim()
     $o.NewName       = if ($renameWanted) { $name } else { $null }
@@ -379,6 +659,9 @@ function Start-Setup {
     $o.SkipInstalled = $chkSkipInst.Checked
     $o.EsetKey       = $txtEset.Text.Trim()
     $o.TimeZone      = [string]$cmbTz.SelectedItem
+    $o.Hash          = $chkHash.Checked
+    $o.ChromeUrl     = $txtChrome.Text.Trim()
+    $o.CopyLog       = $chkCopyLog.Checked
     $script:Opts     = $o
     $script:DryRun   = $chkDry.Checked
 
@@ -393,9 +676,19 @@ function Start-Setup {
     if ($chkMcAfee.Checked)  { $plan += [pscustomobject]@{ Name = "Usuwanie McAfee";            Fn = "Step-McAfee";       Arg = $null } }
     if ($chkOffice.Checked)  { $plan += [pscustomobject]@{ Name = "Usuwanie starego Office";    Fn = "Step-Office";       Arg = $null } }
     foreach ($a in $apps)    { $plan += [pscustomobject]@{ Name = "Instalacja: $($a.name)";     Fn = "Step-App";          Arg = $a } }
+    if ($chkVerify.Checked -and $apps.Count -gt 0) {
+                               $plan += [pscustomobject]@{ Name = "Weryfikacja instalacji";     Fn = "Step-Verify";       Arg = $null } }
     if ($chkTz.Checked)      { $plan += [pscustomobject]@{ Name = "Strefa czasowa";             Fn = "Step-TimeZone";     Arg = $null } }
     if ($chkExt.Checked)     { $plan += [pscustomobject]@{ Name = "Eksplorator plików";         Fn = "Step-FileExt";      Arg = $null } }
     if ($chkThisPC.Checked)  { $plan += [pscustomobject]@{ Name = "Ikona Ten komputer";         Fn = "Step-ThisPC";       Arg = $null } }
+    if ($chkAds.Checked)       { $plan += [pscustomobject]@{ Name = "Wyłączenie reklam i sugestii"; Fn = "Step-Ads";          Arg = $null } }
+    if ($chkDebloat.Checked)   { $plan += [pscustomobject]@{ Name = "Usuwanie zbędnych aplikacji Windows"; Fn = "Step-Debloat"; Arg = $null } }
+    if ($chkLang.Checked)      { $plan += [pscustomobject]@{ Name = "Region i język: polski";    Fn = "Step-Language";     Arg = $null } }
+    if ($chkShortcuts.Checked) { $plan += [pscustomobject]@{ Name = "Skróty na pulpicie";        Fn = "Step-Shortcuts";    Arg = $null } }
+    if ($chkChrome.Checked)    { $plan += [pscustomobject]@{ Name = "Chrome - strona startowa";  Fn = "Step-ChromePolicy"; Arg = $null } }
+    if ($chkWUInstall.Checked) { $plan += [pscustomobject]@{ Name = "Aktualizacje Windows";      Fn = "Step-WindowsUpdateInstall"; Arg = $null } }
+    if ($chkCleanInst.Checked) { $plan += [pscustomobject]@{ Name = "Sprzątanie instalatorów";   Fn = "Step-CleanInstallers"; Arg = $null } }
+    if ($chkCleanTemp.Checked) { $plan += [pscustomobject]@{ Name = "Sprzątanie plików tymczasowych"; Fn = "Step-CleanTemp"; Arg = $null } }
     if ($chkPolicy.Checked)  { $plan += [pscustomobject]@{ Name = "Przywrócenie ExecutionPolicy"; Fn = "Step-Policy";     Arg = $null } }
     if ($chkWU.Checked)      { $plan += [pscustomobject]@{ Name = "Windows Update";             Fn = "Step-WindowsUpdate"; Arg = $null } }
 
@@ -413,6 +706,7 @@ function Start-Setup {
     $script:Results.Clear()
     $script:Cancel = $false
     $script:RebootNeeded = $false
+    $script:InstalledNow = @()
     $script:Running = $true
     $script:LogBox.Clear()
     $tabs.SelectedTab = $tabLog
@@ -532,18 +826,33 @@ $chkExt    = New-Check "Pokaż rozszerzenia plików i ukryte pliki"           12
 $chkThisPC = New-Check "Ikona «Ten komputer» na pulpicie"                   12 98  416 $gExtra
 $chkTz.Checked = $true
 
-$gOpt = New-Group "Opcje instalacji" 444 168 440 100 $tabSet
+$gOpt = New-Group "Opcje instalacji" 444 168 440 152 $tabSet
 $chkSkipInst = New-Check "Pomijaj aplikacje, które są już zainstalowane" 12 22 416 $gOpt
-[void](New-Label "Klucz ESET (opcjonalnie):" 12 52 150 20 $gOpt)
-$txtEset = New-Ctl System.Windows.Forms.TextBox "" 166 49 262 23 $gOpt
+$chkVerify   = New-Check "Zweryfikuj instalację w rejestrze po zakończeniu" 12 46 416 $gOpt
+$chkHash     = New-Check "Sprawdzaj sumy SHA256 instalatorów (jeśli są w apps.json)" 12 70 416 $gOpt
+[void](New-Label "Klucz ESET (opcjonalnie):" 12 102 150 20 $gOpt)
+$txtEset = New-Ctl System.Windows.Forms.TextBox "" 166 99 262 23 $gOpt
 $txtEset.UseSystemPasswordChar = $true
-$lblEsetHint = New-Label "Klucz nie jest zapisywany do logu ani na dysku." 12 76 416 18 $gOpt
+$lblEsetHint = New-Label "Klucz nie jest zapisywany do logu ani na dysku." 12 126 416 18 $gOpt
 $lblEsetHint.ForeColor = [System.Drawing.Color]::Gray
 
-$gEnd = New-Group "Na koniec" 444 276 440 80 $tabSet
-$chkPolicy = New-Check "Przywróć ExecutionPolicy (Restricted)" 12 22 416 $gEnd
-$chkWU     = New-Check "Otwórz Windows Update"                12 46 416 $gEnd
-$chkWU.Checked = $false
+$gMore = New-Group "Dodatkowe funkcje" 444 328 440 178 $tabSet
+$chkAds       = New-Check "Wyłącz reklamy i sugestie w Windows (Start, ekran blokady)"  12 22 416 $gMore
+$chkDebloat   = New-Check "Usuń zbędne aplikacje Windows (Xbox, Solitaire, Bing, Skype...)" 12 46 416 $gMore $false
+$chkLang      = New-Check "Region i język: polski (pl-PL), klawiatura polska programisty" 12 70 416 $gMore $false
+$chkShortcuts = New-Check "Skróty na pulpicie: Chrome, Word, Excel, Outlook, Adobe Reader" 12 94 416 $gMore
+$chkChrome    = New-Check "Chrome: strona startowa firmy (zasada Chrome Enterprise)"    12 118 416 $gMore $false
+$txtChrome    = New-Ctl System.Windows.Forms.TextBox "https://www.google.pl" 32 144 396 23 $gMore
+
+$gTidy = New-Group "Sprzątanie" 12 396 420 104 $tabSet
+$chkCleanTemp = New-Check "Wyczyść pliki tymczasowe i koszyk na koniec"                  12 22 396 $gTidy $false
+$chkCleanInst = New-Check "Usuń zainstalowane instalatory z folderu (tylko dysk lokalny)" 12 46 396 $gTidy $false
+$chkCopyLog   = New-Check "Skopiuj log na pendrive po zakończeniu"                       12 70 396 $gTidy $false
+
+$gEnd = New-Group "Na koniec" 12 508 420 104 $tabSet
+$chkWUInstall = New-Check "Zainstaluj aktualizacje Windows (może potrwać długo)" 12 22 396 $gEnd $false
+$chkWU        = New-Check "Otwórz Windows Update"                                12 46 396 $gEnd $false
+$chkPolicy    = New-Check "Przywróć ExecutionPolicy (Restricted)"                12 70 396 $gEnd
 
 # --- zakladka: Aplikacje ---
 $lvApps = New-Object System.Windows.Forms.ListView
@@ -552,23 +861,25 @@ $lvApps.View = "Details"
 $lvApps.CheckBoxes = $true
 $lvApps.FullRowSelect = $true
 $lvApps.GridLines = $true
-[void]$lvApps.Columns.Add("Aplikacja", 260)
-[void]$lvApps.Columns.Add("Plik instalatora", 300)
+[void]$lvApps.Columns.Add("Aplikacja", 230)
+[void]$lvApps.Columns.Add("Plik instalatora", 270)
 [void]$lvApps.Columns.Add("Plik w folderze", 110)
 [void]$lvApps.Columns.Add("Zainstalowana", 100)
-[void]$lvApps.Columns.Add("Tryb", 100)
+[void]$lvApps.Columns.Add("Suma SHA256", 90)
+[void]$lvApps.Columns.Add("Tryb", 90)
 $tabApps.Controls.Add($lvApps)
 
 $appsBar = New-Object System.Windows.Forms.Panel
 $appsBar.Dock = "Bottom"
 $appsBar.Height = 44
 $tabApps.Controls.Add($appsBar)
-$btnAll     = New-Ctl System.Windows.Forms.Button "Zaznacz wszystkie" 8 8 130 28 $appsBar
-$btnNone    = New-Ctl System.Windows.Forms.Button "Odznacz wszystkie" 146 8 130 28 $appsBar
-$btnRefresh = New-Ctl System.Windows.Forms.Button "Odśwież listę"     284 8 110 28 $appsBar
-$btnEdit    = New-Ctl System.Windows.Forms.Button "Edytuj apps.json"  402 8 120 28 $appsBar
-$btnAddFiles = New-Ctl System.Windows.Forms.Button "Dodaj pliki..."    534 8 110 28 $appsBar
-$btnUsb      = New-Ctl System.Windows.Forms.Button "Znajdź na pendrive" 652 8 140 28 $appsBar
+$btnAll     = New-Ctl System.Windows.Forms.Button "Zaznacz wszystkie" 8 8 120 28 $appsBar
+$btnNone    = New-Ctl System.Windows.Forms.Button "Odznacz wszystkie" 136 8 120 28 $appsBar
+$btnRefresh = New-Ctl System.Windows.Forms.Button "Odśwież listę"     264 8 100 28 $appsBar
+$btnEdit    = New-Ctl System.Windows.Forms.Button "Edytuj apps.json"  372 8 112 28 $appsBar
+$btnAddFiles = New-Ctl System.Windows.Forms.Button "Dodaj pliki..."    492 8 100 28 $appsBar
+$btnUsb      = New-Ctl System.Windows.Forms.Button "Znajdź na pendrive" 600 8 130 28 $appsBar
+$btnHash     = New-Ctl System.Windows.Forms.Button "Zapisz sumy SHA256" 738 8 140 28 $appsBar
 
 $lblDrop = New-Object System.Windows.Forms.Label
 $lblDrop.Dock = "Top"
@@ -634,6 +945,7 @@ function Update-AppList {
         [void]$item.SubItems.Add($a.file)
         [void]$item.SubItems.Add($fileCol)
         [void]$item.SubItems.Add($(if ($isInst) { "tak" } else { "nie" }))
+        [void]$item.SubItems.Add($(if ($a.PSObject.Properties['sha256'] -and $a.sha256) { "zapisana" } else { "brak" }))
         [void]$item.SubItems.Add([string]$types[[string]$a.type])
         $item.Tag = $a
 
@@ -750,6 +1062,7 @@ $btnAddFiles.Add_Click({
     if ($dlg.ShowDialog() -eq 'OK') { Add-DroppedPaths $dlg.FileNames }
 })
 $btnUsb.Add_Click({ Find-RemovableInstallers })
+$btnHash.Add_Click({ Save-Hashes })
 
 # Przeciaganie plikow/folderow na okno
 $onDragEnter = {

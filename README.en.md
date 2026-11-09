@@ -55,12 +55,25 @@ Keep the `files\` folder next to `Start-Firmowy.bat`.
 | Power | High Performance plan (created from template if missing), screen/sleep = never, hibernation off, screensaver off |
 | Pre-install cleanup | Removes McAfee (Antivirus, WebAdvisor + folders) and old Office via Microsoft's official SaRA tool |
 | Extra settings | System restore point, time zone + time sync, show file extensions and hidden files, "This PC" desktop icon |
-| Install options | Skip already installed apps, optional ESET activation key |
-| At the end | Restore ExecutionPolicy (Restricted), open Windows Update |
+| Install options | Skip already installed apps, **registry verification after install**, **SHA256 check** of installers, optional ESET activation key |
+| Extra features | Disable ads and suggestions (Start, lock screen), remove unneeded Windows apps, pl-PL region and language, desktop shortcuts, Chrome start page |
+| Cleanup | Clean temp files and recycle bin, delete installed installers from the local folder, copy the log to a USB stick |
+| At the end | Install Windows updates, open Windows Update, restore ExecutionPolicy (Restricted) |
+
+#### Extra features in detail
+
+- **Ads and suggestions** — turns off suggested apps in Start, lock-screen ads, the advertising ID and automatic installs of promoted apps (current user).
+- **Unneeded Windows apps** (off by default) — removes Xbox, Solitaire, Bing News/Weather, Skype, Clipchamp, consumer Teams, Zune, 3D Builder, Mixed Reality, promoted games (Candy Crush etc.). Store, Calculator, Photos and Notepad are untouched.
+- **Region and language** (off by default) — pl-PL format, Poland location, Polish Programmers keyboard. Replaces the user's language list; full effect after a reboot.
+- **Desktop shortcuts** — for all users: Chrome, Word, Excel, Outlook, Adobe Reader (only for installed programs).
+- **Chrome** (off by default) — sets the start page via Chrome Enterprise policy in the registry (Chrome will show "managed by your organization").
+- **Windows updates** (off by default) — searches, downloads and installs updates through the built-in Windows Update API (no extra modules). Can take long; cannot be cancelled midway.
+- **Installer cleanup** — deletes only the files installed in this run, and only from a local drive (never from a USB stick or network share).
+- **Log copy** — writes the log to `PrepareWorkstation-logs\` on a USB stick (preferring the one the installers came from).
 
 ### "Aplikacje" (Applications) tab
 
-Driven by `apps.json`. For each entry you see whether the installer file is present, whether the app is already installed, and the install mode. Entries without a file are greyed out and unchecked. Buttons: select/deselect all, refresh, **Edytuj apps.json** (edit).
+Driven by `apps.json`. For each entry you see whether the installer file is present, whether the app is already installed, and the install mode. Entries without a file are greyed out and unchecked. Buttons: select/deselect all, refresh, **Edytuj apps.json** (edit), **Zapisz sumy SHA256** (save SHA256).
 
 **Installers from a USB stick — no copying to `C:\instalki`:**
 
@@ -129,6 +142,11 @@ No script editing needed. Add an object to `script\files\apps.json` (or click **
 | `detect` | regex matched against names in "Apps & features" — used to skip already installed apps |
 | `default` | whether it is checked by default |
 | `warn32on64` | (optional) warn for 32-bit installers on 64-bit systems |
+| `sha256` | (optional) installer checksum — see below |
+
+### Installer SHA256 checksums
+
+Click **Zapisz sumy SHA256** on the Applications tab (with known-good files) to store their hashes in `apps.json`. From then on, with the "Sprawdzaj sumy SHA256" option on, the program refuses to install a file with a different hash (corrupted, tampered, or a newer version — then save the hashes again). Apps without a hash install as before.
 
 ---
 
