@@ -69,15 +69,5 @@
     "args": "/S",
     "detect": "UrBackup",
     "default": true
-  },
-  {
-    "id": "7zip",
-    "name": "7-Zip",
-    "file": "7z-x64.exe",
-    "url": "https://www.7-zip.org/",
-    "type": "exe",
-    "args": "/S",
-    "detect": "^7-Zip",
-    "default": false
   }
 ]

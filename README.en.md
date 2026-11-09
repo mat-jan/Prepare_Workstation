@@ -98,7 +98,6 @@ Default file names (changeable in `apps.json`):
 | `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit PL | manual | https://www.microsoft.com/pl-pl/microsoft-365/get-started-with-office-2021 |
 | `AdobeReader_PL.exe` | Adobe Acrobat Reader PL (offline) | silent | https://get.adobe.com/reader/enterprise/ |
 | `UrBackup_Client.exe` | UrBackup Client (x86/x64) | silent, `/S` | https://www.urbackup.org/download.html#client_windows |
-| `7z-x64.exe` | 7-Zip (unchecked by default) | silent, `/S` | https://www.7-zip.org/ |
 
 > 32-bit Office on a 64-bit OS: the wizard asks for confirmation before launching the installer.
 

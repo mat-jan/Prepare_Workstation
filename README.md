@@ -98,7 +98,6 @@ Domyślne nazwy plików (zmienisz je w `apps.json`):
 | `OfficeSetup32bitPL.exe` | Microsoft Office 32-bit PL | ręczny | https://www.microsoft.com/pl-pl/microsoft-365/get-started-with-office-2021 |
 | `AdobeReader_PL.exe` | Adobe Acrobat Reader PL (offline) | cichy | https://get.adobe.com/reader/enterprise/ |
 | `UrBackup_Client.exe` | UrBackup Client (x86/x64) | cichy, `/S` | https://www.urbackup.org/download.html#client_windows |
-| `7z-x64.exe` | 7-Zip (domyślnie odznaczony) | cichy, `/S` | https://www.7-zip.org/ |
 
 > Office 32-bit na systemie 64-bit: program pyta o potwierdzenie przed uruchomieniem instalatora.
 
