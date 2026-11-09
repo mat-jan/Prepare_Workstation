@@ -1,6 +1,6 @@
 @echo off
-:: Uruchom skrypt PowerShell jako Administrator z pominiéciem ExecutionPolicy
-:: Dziala bez koniecznosci naciskania ENTER - od razu startuje w nowym oknie admina
+:: Uruchamia kreator Prepare Workstation (GUI) jako Administrator.
+:: ExecutionPolicy jest omijana tylko dla tego jednego procesu.
 
 net session >nul 2>&1
 if %errorlevel% neq 0 (
@@ -9,4 +9,4 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0files\Setup-Firmowy.ps1"
+start "" powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%~dp0files\Setup-Firmowy.ps1"

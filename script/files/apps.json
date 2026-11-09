@@ -1,0 +1,75 @@
+[
+  {
+    "id": "anydesk",
+    "name": "AnyDesk",
+    "file": "AnyDesk.exe",
+    "type": "exe",
+    "args": "--install \"C:\\Program Files (x86)\\AnyDesk\" --silent --create-shortcuts --create-desktop-icon --start-with-win",
+    "detect": "^AnyDesk",
+    "default": true
+  },
+  {
+    "id": "eset",
+    "name": "ESET Endpoint Security",
+    "file": "ees_nt64.msi",
+    "type": "msi",
+    "args": "ADDLOCAL=ALL REBOOT_WHEN_NEEDED=0",
+    "detect": "^ESET",
+    "default": true
+  },
+  {
+    "id": "chrome",
+    "name": "Google Chrome Enterprise",
+    "file": "googlechromestandaloneenterprise64.msi",
+    "type": "msi",
+    "args": "",
+    "detect": "^Google Chrome",
+    "default": true
+  },
+  {
+    "id": "intel-dsa",
+    "name": "Intel Driver & Support Assistant",
+    "file": "Intel-Driver-and-Support-Assistant-Installer.exe",
+    "type": "exe",
+    "args": "-q -norestart",
+    "detect": "Intel.*Driver (and|&) Support Assistant",
+    "default": true
+  },
+  {
+    "id": "office",
+    "name": "Microsoft Office 32-bit PL",
+    "file": "OfficeSetup32bitPL.exe",
+    "type": "manual",
+    "args": "",
+    "detect": "Microsoft 365|Microsoft Office",
+    "warn32on64": true,
+    "default": true
+  },
+  {
+    "id": "adobe",
+    "name": "Adobe Acrobat Reader PL",
+    "file": "AdobeReader_PL.exe",
+    "type": "exe",
+    "args": "/sAll /rs /msi /qn /norestart EULA_ACCEPT=YES",
+    "detect": "Adobe Acrobat|Adobe Reader",
+    "default": true
+  },
+  {
+    "id": "urbackup",
+    "name": "UrBackup Client",
+    "file": "UrBackup_Client.exe",
+    "type": "exe",
+    "args": "/S",
+    "detect": "UrBackup",
+    "default": true
+  },
+  {
+    "id": "7zip",
+    "name": "7-Zip",
+    "file": "7z-x64.exe",
+    "type": "exe",
+    "args": "/S",
+    "detect": "^7-Zip",
+    "default": false
+  }
+]
