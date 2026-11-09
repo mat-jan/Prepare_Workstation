@@ -12,6 +12,11 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+# Pozwala przeciagac pliki z Eksploratora (zwykly uzytkownik) do tego okna (administrator)
+try {
+    Add-Type -Namespace Win32 -Name Uipi -MemberDefinition '[DllImport("user32.dll")] public static extern bool ChangeWindowMessageFilterEx(IntPtr hWnd, uint msg, uint action, IntPtr changeInfo);'
+} catch { }
+
 $AppVersion = "dev"   # podmieniane przez build/Build-Package.ps1
 
 # Katalog programu: dziala zarowno jako .ps1, jak i po zamianie na .exe (ps2exe)
@@ -25,6 +30,7 @@ $LogFile   = Join-Path $LogDir ("setup-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 
 $script:Results      = New-Object System.Collections.ArrayList
 $script:Catalog      = @()
+$script:FileOverrides = @{}   # nazwa pliku (male litery) -> pelna sciezka dodana recznie / z pendrive
 $script:Opts         = @{}
 $script:DryRun       = $false
 $script:Cancel       = $false
@@ -114,6 +120,16 @@ function Invoke-External {
         Start-Sleep -Milliseconds 100
     }
     return $p.ExitCode
+}
+
+# Sciezka instalatora: najpierw plik dodany recznie (przeciagniety/z pendrive), potem folder instalatorow
+function Resolve-Installer {
+    param([string]$File, [string]$Folder)
+    $k = $File.ToLower()
+    if ($script:FileOverrides.ContainsKey($k) -and (Test-Path $script:FileOverrides[$k])) {
+        return $script:FileOverrides[$k]
+    }
+    return (Join-Path $Folder $File)
 }
 
 function Get-AppCatalog {
@@ -230,7 +246,7 @@ function Step-App {
     param($App)
     $o    = $script:Opts
     $name = $App.name
-    $path = Join-Path $o.InstallerPath $App.file
+    $path = Resolve-Installer $App.file $o.InstallerPath
 
     if (-not (Test-Path $path)) { Set-Outcome $name "SKIP" "brak pliku: $($App.file)"; return }
 
@@ -551,6 +567,16 @@ $btnAll     = New-Ctl System.Windows.Forms.Button "Zaznacz wszystkie" 8 8 130 28
 $btnNone    = New-Ctl System.Windows.Forms.Button "Odznacz wszystkie" 146 8 130 28 $appsBar
 $btnRefresh = New-Ctl System.Windows.Forms.Button "Odśwież listę"     284 8 110 28 $appsBar
 $btnEdit    = New-Ctl System.Windows.Forms.Button "Edytuj apps.json"  402 8 120 28 $appsBar
+$btnAddFiles = New-Ctl System.Windows.Forms.Button "Dodaj pliki..."    534 8 110 28 $appsBar
+$btnUsb      = New-Ctl System.Windows.Forms.Button "Znajdź na pendrive" 652 8 140 28 $appsBar
+
+$lblDrop = New-Object System.Windows.Forms.Label
+$lblDrop.Dock = "Top"
+$lblDrop.Height = 26
+$lblDrop.TextAlign = "MiddleLeft"
+$lblDrop.ForeColor = [System.Drawing.Color]::DimGray
+$lblDrop.Text = "  Przeciągnij na okno pliki instalatorów lub cały folder z pendrive'a - program rozpozna je po nazwie i użyje bezpośrednio z pendrive'a."
+$tabApps.Controls.Add($lblDrop)
 
 # --- zakladka: Przebieg ---
 $script:LogBox = New-Object System.Windows.Forms.RichTextBox
@@ -582,28 +608,114 @@ $busyControls = @($tabSet, $lvApps, $appsBar, $btnRun, $chkDry)
 #  ZDARZENIA
 # ============================================================
 function Update-AppList {
-    param([bool]$ReloadCatalog = $false)
+    param([bool]$ReloadCatalog = $false, [bool]$KeepSelection = $false, [string[]]$ForceCheck = @())
+
+    $prev = @{}
+    if ($KeepSelection) { foreach ($it in $lvApps.Items) { $prev[[string]$it.Tag.id] = $it.Checked } }
     if ($ReloadCatalog) { $script:Catalog = Get-AppCatalog }
+
     $lvApps.Items.Clear()
     $installed = @(Get-InstalledApps)
     $types = @{ exe = "cicha"; msi = "cicha (MSI)"; manual = "ręczna" }
+    $folder = $txtPath.Text.Trim()
 
     foreach ($a in $script:Catalog) {
-        $fileOk = Test-Path (Join-Path $txtPath.Text.Trim() $a.file)
+        $id     = [string]$a.id
+        $key    = ([string]$a.file).ToLower()
+        $isOver = $script:FileOverrides.ContainsKey($key) -and (Test-Path $script:FileOverrides[$key])
+        $fileOk = $isOver -or (Test-Path (Join-Path $folder $a.file))
         $isInst = $false
         if ($a.detect) {
             $isInst = [bool]($installed | Where-Object { $_.DisplayName -match $a.detect } | Select-Object -First 1)
         }
+        $fileCol = if ($isOver) { "dodany ręcznie" } elseif ($fileOk) { "tak" } else { "BRAK" }
+
         $item = New-Object System.Windows.Forms.ListViewItem($a.name)
         [void]$item.SubItems.Add($a.file)
-        [void]$item.SubItems.Add($(if ($fileOk) { "tak" } else { "BRAK" }))
+        [void]$item.SubItems.Add($fileCol)
         [void]$item.SubItems.Add($(if ($isInst) { "tak" } else { "nie" }))
         [void]$item.SubItems.Add([string]$types[[string]$a.type])
         $item.Tag = $a
-        $item.Checked = ($fileOk -and [bool]$a.default)
+
+        if ($ForceCheck -contains $id)                           { $item.Checked = $true }
+        elseif ($KeepSelection -and $prev.ContainsKey($id))      { $item.Checked = ($prev[$id] -and $fileOk) }
+        else                                                     { $item.Checked = ($fileOk -and [bool]$a.default) }
+
         if (-not $fileOk) { $item.ForeColor = [System.Drawing.Color]::Gray }
         [void]$lvApps.Items.Add($item)
     }
+}
+
+# Dopasowuje pliki/foldery (przeciagniete lub znalezione na pendrive) do aplikacji z apps.json po nazwie pliku
+function Add-DroppedPaths {
+    param([string[]]$Paths)
+
+    $files = @()
+    foreach ($p in $Paths) {
+        if (Test-Path -LiteralPath $p -PathType Container) {
+            $files += @(Get-ChildItem -LiteralPath $p -File -Recurse -Depth 3 -ErrorAction SilentlyContinue)
+        } elseif (Test-Path -LiteralPath $p -PathType Leaf) {
+            $files += Get-Item -LiteralPath $p
+        }
+    }
+
+    $byName = @{}
+    foreach ($a in $script:Catalog) { $byName[([string]$a.file).ToLower()] = $a }
+
+    $matchedIds = @()
+    $unmatched  = 0
+    foreach ($f in $files) {
+        $k = $f.Name.ToLower()
+        if ($byName.ContainsKey($k)) {
+            $script:FileOverrides[$k] = $f.FullName
+            $matchedIds += [string]$byName[$k].id
+            Write-Log "Dodano: $($byName[$k].name) <- $($f.FullName)" "OK"
+        } else {
+            $unmatched++
+        }
+    }
+
+    if ($matchedIds.Count -eq 0) {
+        Write-Log "Żaden z $($files.Count) plików nie pasuje do apps.json (rozpoznawanie po nazwie pliku)." "SKIP"
+        [void](Show-Msg "Nie rozpoznano żadnego instalatora.`nProgram dopasowuje pliki po nazwie podanej w apps.json (kolumna „Plik instalatora”)." "Prepare Workstation" "OK" "Information")
+        return
+    }
+    if ($unmatched -gt 0) { Write-Log "Pominięto $unmatched plików niepasujących do żadnej aplikacji." "INFO" }
+    Update-AppList $false $true $matchedIds
+    $tabs.SelectedTab = $tabApps
+}
+
+# Szuka instalatorow na pendrive'ach (dyskach wymiennych)
+function Find-RemovableInstallers {
+    $roots = @([System.IO.DriveInfo]::GetDrives() |
+        Where-Object { $_.DriveType -eq 'Removable' -and $_.IsReady } |
+        ForEach-Object { $_.RootDirectory.FullName })
+    if ($roots.Count -eq 0) {
+        [void](Show-Msg "Nie wykryto pendrive'a (dysku wymiennego).`nPodłącz go albo użyj przycisku „Dodaj pliki...”." "Prepare Workstation" "OK" "Information")
+        return
+    }
+    $names = @($script:Catalog | ForEach-Object { ([string]$_.file).ToLower() })
+    $found = @()
+    foreach ($r in $roots) {
+        Write-Log "Przeszukuję: $r" "INFO"
+        $found += @(Get-ChildItem -LiteralPath $r -File -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                    Where-Object { $names -contains $_.Name.ToLower() })
+    }
+    if ($found.Count -eq 0) {
+        [void](Show-Msg "Na dyskach wymiennych ($($roots -join ', ')) nie znaleziono pasujących instalatorów." "Prepare Workstation" "OK" "Information")
+        return
+    }
+    Add-DroppedPaths @($found | ForEach-Object { $_.FullName })
+}
+
+function Enable-ElevatedDrop {
+    try {
+        foreach ($c in @($form, $tabApps, $lvApps)) {
+            foreach ($m in 0x233, 0x4A, 0x49) {   # WM_DROPFILES, WM_COPYDATA, WM_COPYGLOBALDATA
+                [void][Win32.Uipi]::ChangeWindowMessageFilterEx($c.Handle, [uint32]$m, 1, [IntPtr]::Zero)
+            }
+        }
+    } catch { }
 }
 
 $txtName.Add_TextChanged({
@@ -630,6 +742,32 @@ $btnNone.Add_Click({ foreach ($i in $lvApps.Items) { $i.Checked = $false } })
 $btnRefresh.Add_Click({ Update-AppList $true })
 $btnEdit.Add_Click({ Start-Process notepad.exe -ArgumentList "`"$AppsFile`"" })
 
+$btnAddFiles.Add_Click({
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title = "Wybierz pliki instalatorów"
+    $dlg.Multiselect = $true
+    $dlg.Filter = "Instalatory (*.exe;*.msi)|*.exe;*.msi|Wszystkie pliki (*.*)|*.*"
+    if ($dlg.ShowDialog() -eq 'OK') { Add-DroppedPaths $dlg.FileNames }
+})
+$btnUsb.Add_Click({ Find-RemovableInstallers })
+
+# Przeciaganie plikow/folderow na okno
+$onDragEnter = {
+    param($sender, $e)
+    if (-not $script:Running -and $e.Data.GetDataPresent([System.Windows.Forms.DataFormats]::FileDrop)) { $e.Effect = 'Copy' }
+    else { $e.Effect = 'None' }
+}
+$onDragDrop = {
+    param($sender, $e)
+    if ($script:Running) { return }
+    Add-DroppedPaths ([string[]]$e.Data.GetData([System.Windows.Forms.DataFormats]::FileDrop))
+}
+foreach ($c in @($form, $tabApps, $lvApps)) {
+    $c.AllowDrop = $true
+    $c.Add_DragEnter($onDragEnter)
+    $c.Add_DragDrop($onDragDrop)
+}
+
 $btnRun.Add_Click({ Start-Setup })
 $btnCancel.Add_Click({
     $script:Cancel = $true
@@ -655,6 +793,7 @@ $form.Add_Shown({
         Write-Log "Folder instalatorów nie istnieje: $($txtPath.Text)" "SKIP"
     }
     Update-AppList $true
+    Enable-ElevatedDrop
 })
 
 try {

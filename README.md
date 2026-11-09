@@ -62,6 +62,16 @@ Folder `files\` musi leżeć obok `Start-Firmowy.bat` (nie przenoś plików osob
 
 Lista z `apps.json`. Dla każdej pozycji widać: czy plik instalatora jest w folderze, czy aplikacja jest już zainstalowana i w jakim trybie się instaluje. Pozycje bez pliku są wyszarzone i odznaczone. Przyciski: zaznacz/odznacz wszystkie, odśwież, **Edytuj apps.json**.
 
+**Instalatory z pendrive'a — bez kopiowania do `C:\instalki`:**
+
+- **Przeciągnij** pliki instalatorów albo cały folder z pendrive'a na okno programu.
+- **Dodaj pliki...** — zwykłe okno wyboru plików (zawsze działa).
+- **Znajdź na pendrive** — przeszukuje dyski wymienne (do 3 poziomów folderów).
+
+Program dopasowuje pliki po nazwie z `apps.json` (wielkość liter nie ma znaczenia), zaznacza je i używa **bezpośrednio z pendrive'a** — nie wyjmuj go do końca instalacji. Pliki, które nie pasują do żadnej aplikacji, są ignorowane. Kolumna „Plik w folderze” pokazuje wtedy „dodany ręcznie”.
+
+> Windows domyślnie blokuje przeciąganie z zwykłego Eksploratora do okna uruchomionego jako Administrator. Program próbuje to obejść, ale jeśli przeciąganie nie działa (ikona zakazu), użyj **Dodaj pliki...** albo **Znajdź na pendrive**.
+
 ### Zakładka „Przebieg”
 
 Kolorowy log na żywo. Ten sam log trafia do pliku w `C:\ProgramData\PrepareWorkstation\logs\` (przycisk **Folder logów**).

@@ -62,6 +62,16 @@ Keep the `files\` folder next to `Start-Firmowy.bat`.
 
 Driven by `apps.json`. For each entry you see whether the installer file is present, whether the app is already installed, and the install mode. Entries without a file are greyed out and unchecked. Buttons: select/deselect all, refresh, **Edytuj apps.json** (edit).
 
+**Installers from a USB stick — no copying to `C:\instalki`:**
+
+- **Drag** installer files, or a whole folder from the stick, onto the window.
+- **Dodaj pliki...** (Add files) — a regular file picker (always works).
+- **Znajdź na pendrive** (Find on USB) — scans removable drives (up to 3 folder levels).
+
+Files are matched by name against `apps.json` (case-insensitive), checked, and used **directly from the stick** — keep it plugged in until the install finishes. Files matching no app are ignored. The "file" column then shows "dodany ręcznie" (added manually).
+
+> Windows blocks dragging from a normal Explorer into a window running as Administrator. The program tries to work around this; if dragging shows a "no" cursor, use **Dodaj pliki...** or **Znajdź na pendrive**.
+
 ### "Przebieg" (Progress) tab
 
 Live colour-coded log, also written to `C:\ProgramData\PrepareWorkstation\logs\` (the **Folder logów** button opens it).
