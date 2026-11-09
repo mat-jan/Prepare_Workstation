@@ -15,6 +15,9 @@ Program z oknem graficznym (PowerShell + WinForms) do przygotowania nowego kompu
 │   └── files/
 │       ├── Setup-Firmowy.ps1    # kreator (GUI)
 │       └── apps.json            # lista aplikacji do instalacji
+├── build/
+│   └── Build-Package.ps1        # buduje paczki ZIP/EXE
+├── .github/workflows/           # CI i automatyczne wydania
 ├── LICENSE
 └── README.md
 ```
@@ -123,6 +126,29 @@ Nie trzeba już edytować skryptu. Dopisz obiekt do `script\files\apps.json` (al
 ## Aktywacja licencji ESET
 
 Wpisz klucz w polu **Klucz ESET** (Ustawienia → Opcje instalacji). Zostanie przekazany instalatorowi jako `ACTIVATION_DATA=key:...`. Klucz nie jest zapisywany w logu ani w żadnym pliku.
+
+---
+
+## Wydania i paczki
+
+Gotowe paczki są w zakładce **Releases** na GitHubie:
+
+| Plik | Zawartość |
+|------|-----------|
+| `PrepareWorkstation-<wersja>.zip` | `Start-Firmowy.bat` + `files\` (skrypt i `apps.json`) + szablon folderu `instalki-template` + README |
+| `PrepareWorkstation-exe-<wersja>.zip` | `Prepare-Workstation.exe` (samodzielny, wymaga admina) + `apps.json` obok pliku `.exe` + szablon + README |
+| `SHA256SUMS.txt` | sumy kontrolne — sprawdź: `Get-FileHash plik.zip` |
+
+> Plik `.exe` nie jest podpisany certyfikatem, więc SmartScreen lub antywirus mogą go oznaczyć. Wersja skryptowa (`.bat` + `.ps1`) jest przejrzysta i nie ma tego problemu.
+
+Budowanie lokalnie (folder `dist\`):
+
+```powershell
+pwsh -File build\Build-Package.ps1 -Version 1.0.0            # tylko ZIP
+powershell -File build\Build-Package.ps1 -Version 1.0.0 -WithExe   # ZIP + EXE (Windows)
+```
+
+Nowe wydanie tworzy się samo po wypchnięciu tagu: `git tag v1.0.0 && git push origin v1.0.0` (workflow `.github/workflows/release.yml`). Workflow `ci.yml` sprawdza składnię skryptów i `apps.json` przy każdym pushu.
 
 ---
 

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate PowerShell syntax and apps.json
+        shell: powershell
+        run: |
+          $fail = $false
+          foreach ($f in Get-ChildItem -Recurse -Include *.ps1 -Path script, build) {
+            $errs = $null; $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs)
+            if ($errs) { $fail = $true; $errs | ForEach-Object { Write-Host "$($f.Name):$($_.Extent.StartLineNumber): $($_.Message)" } }
+            else { Write-Host "OK  $($f.Name)" }
+          }
+          $apps = Get-Content script/files/apps.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          foreach ($a in $apps) {
+            foreach ($k in 'id','name','file','type') { if (-not $a.$k) { $fail = $true; Write-Host "apps.json: '$($a.name)' bez pola $k" } }
+            if ($a.type -notin 'exe','msi','manual') { $fail = $true; Write-Host "apps.json: '$($a.name)' ma zly type '$($a.type)'" }
+          }
+          if ($fail) { exit 1 }
+
+      - name: Build packages (zip + exe)
+        shell: powershell
+        run: ./build/Build-Package.ps1 -Version "ci" -WithExe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*

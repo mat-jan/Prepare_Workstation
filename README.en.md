@@ -15,6 +15,9 @@ A GUI tool (PowerShell + WinForms) for preparing a new corporate workstation: co
 │   └── files/
 │       ├── Setup-Firmowy.ps1    # the wizard (GUI)
 │       └── apps.json            # list of applications to install
+├── build/
+│   └── Build-Package.ps1        # builds ZIP/EXE packages
+├── .github/workflows/           # CI and automated releases
 ├── LICENSE
 └── README.md / README.en.md
 ```
@@ -123,6 +126,29 @@ No script editing needed. Add an object to `script\files\apps.json` (or click **
 ## ESET activation
 
 Enter the key in the **ESET key** field (Settings → Install options). It is passed to the installer as `ACTIVATION_DATA=key:...` and is never written to the log or to disk.
+
+---
+
+## Releases and packages
+
+Ready-made packages are on the **Releases** page on GitHub:
+
+| File | Contents |
+|------|----------|
+| `PrepareWorkstation-<version>.zip` | `Start-Firmowy.bat` + `files\` (script and `apps.json`) + `instalki-template` folder template + README |
+| `PrepareWorkstation-exe-<version>.zip` | `Prepare-Workstation.exe` (standalone, requires admin) + `apps.json` next to the `.exe` + template + README |
+| `SHA256SUMS.txt` | checksums — verify with `Get-FileHash file.zip` |
+
+> The `.exe` is not code-signed, so SmartScreen or an antivirus may flag it. The script version (`.bat` + `.ps1`) is transparent and does not have this problem.
+
+Build locally (output in `dist\`):
+
+```powershell
+pwsh -File build\Build-Package.ps1 -Version 1.0.0            # ZIP only
+powershell -File build\Build-Package.ps1 -Version 1.0.0 -WithExe   # ZIP + EXE (Windows)
+```
+
+A new release is created automatically when a version tag is pushed: `git tag v1.0.0 && git push origin v1.0.0` (workflow `.github/workflows/release.yml`). The `ci.yml` workflow validates script syntax and `apps.json` on every push.
 
 ---
 

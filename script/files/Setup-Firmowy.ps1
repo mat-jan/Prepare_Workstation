@@ -12,8 +12,14 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppsFile  = Join-Path $ScriptDir "apps.json"
+$AppVersion = "dev"   # podmieniane przez build/Build-Package.ps1
+
+# Katalog programu: dziala zarowno jako .ps1, jak i po zamianie na .exe (ps2exe)
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot }
+             else { Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
+$AppsFile  = @((Join-Path $ScriptDir "apps.json"), (Join-Path $ScriptDir "files\apps.json")) |
+             Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $AppsFile) { $AppsFile = Join-Path $ScriptDir "apps.json" }
 $LogDir    = Join-Path $env:ProgramData "PrepareWorkstation\logs"
 $LogFile   = Join-Path $LogDir ("setup-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 
@@ -111,7 +117,10 @@ function Invoke-External {
 }
 
 function Get-AppCatalog {
-    if (-not (Test-Path $AppsFile)) { return @() }
+    if (-not (Test-Path $AppsFile)) {
+        [void](Show-Msg "Nie znaleziono apps.json obok programu:`n$AppsFile" "Błąd konfiguracji" "OK" "Error")
+        return @()
+    }
     try {
         return @(Get-Content $AppsFile -Raw -Encoding UTF8 | ConvertFrom-Json)
     } catch {
@@ -396,7 +405,7 @@ function Start-Setup {
     $progress.Maximum = $plan.Count
     $progress.Value = 0
 
-    Write-Log "Start: $env:COMPUTERNAME, Windows $([Environment]::OSVersion.Version), użytkownik $env:USERNAME" "INFO"
+    Write-Log "Prepare Workstation $AppVersion - start: $env:COMPUTERNAME, Windows $([Environment]::OSVersion.Version), użytkownik $env:USERNAME" "INFO"
     if ($script:DryRun) { Write-Log "TRYB TESTOWY - żadne zmiany nie są wprowadzane" "DRY" }
 
     $i = 0
@@ -447,7 +456,7 @@ function New-Label {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text          = "Prepare Workstation - przygotowanie komputera firmowego"
+$form.Text          = "Prepare Workstation $AppVersion - przygotowanie komputera firmowego"
 $form.ClientSize    = New-Object System.Drawing.Size(920, 690)
 $form.MinimumSize   = New-Object System.Drawing.Size(800, 560)
 $form.StartPosition = "CenterScreen"
