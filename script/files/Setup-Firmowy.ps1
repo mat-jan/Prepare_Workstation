@@ -529,7 +529,7 @@ $cmbTz.SelectedItem = "Central European Standard Time"
 if ($cmbTz.SelectedIndex -lt 0 -and $cmbTz.Items.Count -gt 0) { $cmbTz.SelectedIndex = 0 }
 $gExtra.Controls.Add($cmbTz)
 $chkExt    = New-Check "Pokaż rozszerzenia plików i ukryte pliki"           12 74  416 $gExtra
-$chkThisPC = New-Check "Ikona „Ten komputer” na pulpicie"                   12 98  416 $gExtra
+$chkThisPC = New-Check "Ikona «Ten komputer» na pulpicie"                   12 98  416 $gExtra
 $chkTz.Checked = $true
 
 $gOpt = New-Group "Opcje instalacji" 444 168 440 100 $tabSet
@@ -677,7 +677,7 @@ function Add-DroppedPaths {
 
     if ($matchedIds.Count -eq 0) {
         Write-Log "Żaden z $($files.Count) plików nie pasuje do apps.json (rozpoznawanie po nazwie pliku)." "SKIP"
-        [void](Show-Msg "Nie rozpoznano żadnego instalatora.`nProgram dopasowuje pliki po nazwie podanej w apps.json (kolumna „Plik instalatora”)." "Prepare Workstation" "OK" "Information")
+        [void](Show-Msg "Nie rozpoznano żadnego instalatora.`nProgram dopasowuje pliki po nazwie podanej w apps.json (kolumna «Plik instalatora»)." "Prepare Workstation" "OK" "Information")
         return
     }
     if ($unmatched -gt 0) { Write-Log "Pominięto $unmatched plików niepasujących do żadnej aplikacji." "INFO" }
@@ -691,7 +691,7 @@ function Find-RemovableInstallers {
         Where-Object { $_.DriveType -eq 'Removable' -and $_.IsReady } |
         ForEach-Object { $_.RootDirectory.FullName })
     if ($roots.Count -eq 0) {
-        [void](Show-Msg "Nie wykryto pendrive'a (dysku wymiennego).`nPodłącz go albo użyj przycisku „Dodaj pliki...”." "Prepare Workstation" "OK" "Information")
+        [void](Show-Msg "Nie wykryto pendrive'a (dysku wymiennego).`nPodłącz go albo użyj przycisku «Dodaj pliki...»." "Prepare Workstation" "OK" "Information")
         return
     }
     $names = @($script:Catalog | ForEach-Object { ([string]$_.file).ToLower() })

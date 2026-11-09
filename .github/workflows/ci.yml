@@ -28,6 +28,10 @@ jobs:
           }
           if ($fail) { exit 1 }
 
+      - name: Static checks (smart quotes, GUI helper arguments)
+        shell: powershell
+        run: ./build/Test-Script.ps1
+
       - name: Build packages (zip + exe)
         shell: powershell
         run: ./build/Build-Package.ps1 -Version "ci" -WithExe
