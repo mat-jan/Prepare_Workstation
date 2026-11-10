@@ -7,6 +7,7 @@
     "type": "exe",
     "args": "--install \"C:\\Program Files (x86)\\AnyDesk\" --silent --create-shortcuts --create-desktop-icon --start-with-win",
     "detect": "^AnyDesk",
+    "service": "AnyDesk",
     "default": true
   },
   {
@@ -17,6 +18,7 @@
     "type": "msi",
     "args": "ADDLOCAL=ALL REBOOT_WHEN_NEEDED=0",
     "detect": "^ESET",
+    "service": "ekrn",
     "default": true
   },
   {
@@ -68,6 +70,7 @@
     "type": "exe",
     "args": "/S",
     "detect": "UrBackup",
+    "service": "UrBackupClientBackend",
     "default": true
   }
 ]

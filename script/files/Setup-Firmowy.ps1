@@ -5,7 +5,8 @@
 # ============================================================
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = "C:\instalki"   # folder z instalatorami (lokalny lub UNC)
+    [string]$InstallerPath = "C:\instalki",  # folder z instalatorami (lokalny lub UNC)
+    [switch]$Resume                           # wznowienie po restarcie (uruchamiane przez zadanie harmonogramu)
 )
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -31,6 +32,15 @@ $LogFile   = Join-Path $LogDir ("setup-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
 $script:Results      = New-Object System.Collections.ArrayList
 $script:Catalog      = @()
 $script:InstalledNow  = @()   # aplikacje zainstalowane w tym uruchomieniu
+$script:Todo         = New-Object System.Collections.ArrayList   # lista "do zrobienia recznie"
+$script:WuInstalled  = $false
+$script:Resuming     = $false
+$script:ResumeMode   = $false
+$script:UninstallCache = @()
+$script:UninSel      = @{}
+$script:UninLoaded   = $false
+$script:UninFilling  = $false
+$script:AutoLoaded   = $false
 $script:FileOverrides = @{}   # nazwa pliku (male litery) -> pelna sciezka dodana recznie / z pendrive
 $script:Opts         = @{}
 $script:DryRun       = $false
@@ -369,31 +379,6 @@ function Step-Ads {
     Set-Outcome "Reklamy i sugestie" "OK" "wyłączone (Start, ekran blokady, identyfikator reklamowy)"
 }
 
-function Step-Debloat {
-    $names = @(
-        'Microsoft.BingNews', 'Microsoft.BingWeather', 'Microsoft.GetHelp', 'Microsoft.Getstarted',
-        'Microsoft.MicrosoftSolitaireCollection', 'Microsoft.MicrosoftOfficeHub', 'Microsoft.WindowsFeedbackHub',
-        'Microsoft.ZuneMusic', 'Microsoft.ZuneVideo', 'Microsoft.People', 'Microsoft.SkypeApp',
-        'Microsoft.XboxApp', 'Microsoft.XboxGamingOverlay', 'Microsoft.Xbox.TV.App', 'Microsoft.MixedReality.Portal',
-        'Microsoft.3DBuilder', 'Microsoft.Microsoft3DViewer', 'Microsoft.Print3D', 'Microsoft.WindowsMaps',
-        'Clipchamp.Clipchamp', 'MicrosoftTeams', '*CandyCrush*', 'SpotifyAB.SpotifyMusic', 'Disney.*', 'king.com.*'
-    )
-    if (Test-Dry "Zbędne aplikacje Windows" "do usunięcia (jeśli są): $($names.Count) wzorców") { return }
-
-    $provisioned = @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue)
-    $removed = 0
-    foreach ($n in $names) {
-        foreach ($p in @(Get-AppxPackage -AllUsers -Name $n -ErrorAction SilentlyContinue)) {
-            try { Remove-AppxPackage -Package $p.PackageFullName -AllUsers -ErrorAction Stop; $removed++; Write-Log "Usunięto: $($p.Name)" "INFO" } catch { }
-        }
-        foreach ($pp in @($provisioned | Where-Object { $_.DisplayName -like $n })) {
-            try { Remove-AppxProvisionedPackage -Online -PackageName $pp.PackageName -ErrorAction Stop | Out-Null } catch { }
-        }
-        [System.Windows.Forms.Application]::DoEvents()
-    }
-    Set-Outcome "Zbędne aplikacje Windows" "OK" "usunięto pakietów: $removed"
-}
-
 function Step-Language {
     if (Test-Dry "Region i język" "pl-PL, klawiatura polska programisty") { return }
     Set-Culture -CultureInfo pl-PL
@@ -501,6 +486,7 @@ function Step-WindowsUpdateInstall {
     foreach ($t in $r.Titles) { Write-Log $t "INFO" }
     if ($r.Found -eq 0) { Set-Outcome "Aktualizacje Windows" "OK" "brak nowych aktualizacji"; return }
     if ($r.Reboot) { $script:RebootNeeded = $true }
+    if ($r.Installed -gt 0) { $script:WuInstalled = $true }
     if ($r.Failed -gt 0) { Set-Outcome "Aktualizacje Windows" "ERR" "zainstalowano $($r.Installed) z $($r.Found), błędy: $($r.Failed)" }
     else                 { Set-Outcome "Aktualizacje Windows" "OK" "zainstalowano $($r.Installed) z $($r.Found)" }
 }
@@ -549,6 +535,23 @@ function Step-Verify {
         if ($hit)                     { Set-Outcome "Weryfikacja: $($a.name)" "OK" "wykryta: $($hit.DisplayName) $($hit.DisplayVersion)" }
         elseif ($a.type -eq 'manual') { Set-Outcome "Weryfikacja: $($a.name)" "SKIP" "nie wykryto - dokończ instalację ręcznie" }
         else                          { Set-Outcome "Weryfikacja: $($a.name)" "ERR" "instalator zakończył pracę, ale programu nie ma w rejestrze" }
+    }
+
+    # usługi (pole "service" w apps.json) - czekamy do 20 s, aż wystartują
+    foreach ($a in $apps) {
+        if (-not $a.service) { continue }
+        $svc = $null
+        $t0 = Get-Date
+        do {
+            $svc = Get-Service -Name $a.service -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') { break }
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 500
+        } while (((Get-Date) - $t0).TotalSeconds -lt 20)
+
+        if (-not $svc)                         { Set-Outcome "Usługa: $($a.name)" "ERR" "nie znaleziono usługi $($a.service)" }
+        elseif ($svc.Status -eq 'Running')     { Set-Outcome "Usługa: $($a.name)" "OK" "$($a.service) działa" }
+        else                                   { Set-Outcome "Usługa: $($a.name)" "ERR" "usługa $($a.service) nie działa (stan: $($svc.Status))" }
     }
 }
 
@@ -610,6 +613,608 @@ function Save-Hashes {
     }
 }
 
+# ------------------------------------------------------------
+#  Narzedzia pomocnicze (siec, adres IP, ID AnyDesk)
+# ------------------------------------------------------------
+function Add-Todo {
+    param([string]$Text)
+    if (-not $script:Todo.Contains($Text)) { [void]$script:Todo.Add($Text) }
+}
+
+function Test-TcpPort {
+    param([string]$HostName, [int]$Port, [int]$TimeoutMs = 2500)
+    $c = New-Object System.Net.Sockets.TcpClient
+    try {
+        $iar = $c.BeginConnect($HostName, $Port, $null, $null)
+        $t0 = Get-Date
+        while (-not $iar.IsCompleted -and ((Get-Date) - $t0).TotalMilliseconds -lt $TimeoutMs) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 50
+        }
+        if (-not $iar.IsCompleted) { return $false }
+        $c.EndConnect($iar)
+        return $c.Connected
+    } catch { return $false } finally { $c.Close() }
+}
+
+function Get-LocalIPv4 {
+    try {
+        return @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.PrefixOrigin -ne 'WellKnown' } |
+            ForEach-Object { $_.IPAddress })
+    } catch { return @() }
+}
+
+function Get-AnyDeskId {
+    $exe = @("${env:ProgramFiles(x86)}\AnyDesk\AnyDesk.exe", "$env:ProgramFiles\AnyDesk\AnyDesk.exe") |
+           Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $exe) { return $null }
+    for ($try = 0; $try -lt 3; $try++) {
+        $tmp = Join-Path $env:TEMP ("anydesk-id-{0}.txt" -f [guid]::NewGuid())
+        try {
+            $p = Start-Process -FilePath $exe -ArgumentList "--get-id" -RedirectStandardOutput $tmp -WindowStyle Hidden -PassThru
+            $t0 = Get-Date
+            while (-not $p.HasExited -and ((Get-Date) - $t0).TotalSeconds -lt 10) {
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Milliseconds 100
+            }
+            if (-not $p.HasExited) { try { $p.Kill() } catch { } }
+            $txt = if (Test-Path -LiteralPath $tmp) { Get-Content -LiteralPath $tmp -Raw -ErrorAction SilentlyContinue } else { "" }
+            if ($txt -and ($txt.Trim() -match '^\d{6,12}$')) { return $txt.Trim() }
+        } catch { } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+        $t1 = Get-Date
+        while (((Get-Date) - $t1).TotalSeconds -lt 2) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
+    }
+    return $null
+}
+
+# ------------------------------------------------------------
+#  Bez pytan o opinie i podpowiedzi
+# ------------------------------------------------------------
+function Step-NoFeedback {
+    if (Test-Dry "Opinie i podpowiedzi" "wyłączenie pytań o opinię, Spotlight, «dokończ konfigurację»") { return }
+
+    $siuf = "HKCU:\Software\Microsoft\Siuf\Rules"
+    if (-not (Test-Path $siuf)) { New-Item -Path $siuf -Force | Out-Null }
+    Set-ItemProperty -Path $siuf -Name "NumberOfSIUFInPeriod" -Value 0 -Type DWord -Force
+    Remove-ItemProperty -Path $siuf -Name "PeriodInNanoSeconds" -ErrorAction SilentlyContinue
+
+    $upe = "HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement"
+    if (-not (Test-Path $upe)) { New-Item -Path $upe -Force | Out-Null }
+    Set-ItemProperty -Path $upe -Name "ScoobeSystemSettingEnabled" -Value 0 -Type DWord -Force
+
+    $cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+    if (-not (Test-Path $cdm)) { New-Item -Path $cdm -Force | Out-Null }
+    foreach ($n in 'SubscribedContent-310093Enabled', 'SubscribedContent-338389Enabled', 'SubscribedContent-338393Enabled',
+                   'SubscribedContent-353694Enabled', 'SubscribedContent-353696Enabled', 'SoftLandingEnabled') {
+        Set-ItemProperty -Path $cdm -Name $n -Value 0 -Type DWord -Force
+    }
+
+    $cc = "HKCU:\SOFTWARE\Policies\Microsoft\Windows\CloudContent"
+    if (-not (Test-Path $cc)) { New-Item -Path $cc -Force | Out-Null }
+    Set-ItemProperty -Path $cc -Name "DisableWindowsSpotlightFeatures" -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path $cc -Name "DisableThirdPartySuggestions"    -Value 1 -Type DWord -Force
+
+    Set-Outcome "Opinie i podpowiedzi" "OK" "wyłączone (częstotliwość opinii, Spotlight, porady, «dokończ konfigurację urządzenia»)"
+}
+
+# ------------------------------------------------------------
+#  Odinstalowanie programow (lista jak w Ustawienia -> Aplikacje)
+# ------------------------------------------------------------
+$script:UninstallProtected = '^(Microsoft\.(WindowsStore|StorePurchaseApp|DesktopAppInstaller|SecHealthUI|Windows\.|MicrosoftEdge|AAD\.|AccountsControl|LockApp|CredDialogHost|BioEnrollment|ECApp|AsyncTextService|UI\.Xaml|VCLibs|NET\.|WindowsAppRuntime|Services\.Store|WebpImageExtension|HEIFImageExtension|VP9VideoExtensions)|MicrosoftWindows\.|Windows\.|NcsiUwpApp)'
+$script:JunkStore = @(
+    'Microsoft.BingNews', 'Microsoft.BingWeather', 'Microsoft.GetHelp', 'Microsoft.Getstarted',
+    'Microsoft.MicrosoftSolitaireCollection', 'Microsoft.MicrosoftOfficeHub', 'Microsoft.WindowsFeedbackHub',
+    'Microsoft.ZuneMusic', 'Microsoft.ZuneVideo', 'Microsoft.People', 'Microsoft.SkypeApp',
+    'Microsoft.XboxApp', 'Microsoft.XboxGamingOverlay', 'Microsoft.Xbox.TV.App', 'Microsoft.MixedReality.Portal',
+    'Microsoft.3DBuilder', 'Microsoft.Microsoft3DViewer', 'Microsoft.Print3D', 'Microsoft.WindowsMaps',
+    'Clipchamp.Clipchamp', 'MicrosoftTeams', '*CandyCrush*', 'SpotifyAB.SpotifyMusic', 'Disney.*', 'king.com.*'
+)
+$script:JunkProgram = 'McAfee|Norton|WildTangent|Dell (SupportAssist|Digital Delivery|Optimizer|Customer Connect|Update)|HP (Wolf|Documentation|Smart|Support Assistant|Client Security)|Lenovo (Vantage|Welcome|Companion)|Booking\.com|Candy'
+
+function Get-UninstallList {
+    param([bool]$IncludeComponents = $false)
+    $list = New-Object System.Collections.ArrayList
+
+    $paths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    $seen = @{}
+    foreach ($e in @(Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue)) {
+        $name = [string]$e.DisplayName
+        if (-not $name) { continue }
+        $cmd   = [string]$e.UninstallString
+        $quiet = [string]$e.QuietUninstallString
+        if (-not $cmd -and -not $quiet) { continue }
+        if ($e.NoRemove -eq 1) { continue }
+
+        $isComp = ($e.SystemComponent -eq 1) -or [bool]$e.ParentKeyName -or
+                  ($name -match '^(KB\d+|Update for |Security Update|Hotfix)') -or
+                  ($name -match 'Visual C\+\+ \d|\.NET (Runtime|Core|Desktop|SDK)|Windows Desktop Runtime|Microsoft Edge|WebView2|Windows Driver Package')
+        if ($isComp -and -not $IncludeComponents) { continue }
+
+        $key = "$name|$($e.DisplayVersion)"
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+
+        $guid = ""
+        if ($cmd -match '(?i)msiexec') { $guid = [regex]::Match($cmd, '\{[0-9A-Fa-f\-]+\}').Value }
+        $mode = if ($guid) { "cicha (MSI)" } elseif ($quiet) { "cicha" } else { "widoczna" }
+        $size = if ($e.EstimatedSize) { "{0:N0} MB" -f ($e.EstimatedSize / 1024) } else { "" }
+
+        [void]$list.Add([pscustomobject]@{
+            Kind = 'Program'; Name = $name; Version = [string]$e.DisplayVersion; Publisher = [string]$e.Publisher
+            Size = $size; Mode = $mode; Cmd = $cmd; Quiet = $quiet; Guid = $guid; Package = ""; IsComponent = $isComp
+        })
+    }
+
+    try {
+        foreach ($p in @(Get-AppxPackage -AllUsers -ErrorAction Stop |
+                         Where-Object { -not $_.IsFramework -and -not $_.IsResourcePackage } |
+                         Sort-Object Name -Unique)) {
+            $prot = ($p.Name -match $script:UninstallProtected) -or ($p.NonRemovable -eq $true) -or ($p.SignatureKind -eq 'System')
+            if ($prot -and -not $IncludeComponents) { continue }
+            [void]$list.Add([pscustomobject]@{
+                Kind = 'Store'; Name = $p.Name; Version = [string]$p.Version; Publisher = [string]$p.PublisherId
+                Size = ""; Mode = "cicha"; Cmd = ""; Quiet = ""; Guid = ""; Package = $p.PackageFullName; IsComponent = $prot
+            })
+        }
+    } catch { Write-Log "Nie można odczytać aplikacji Sklepu: $($_.Exception.Message)" "SKIP" }
+
+    return @($list | Sort-Object Name)
+}
+
+function Step-Uninstall {
+    param($Items)
+    $items = @($Items)
+    if (Test-Dry "Odinstalowanie programów" "($($items.Count)): $(($items | ForEach-Object { $_.Name }) -join ', ')") { return }
+
+    foreach ($it in $items) {
+        if ($script:Cancel) { Set-Outcome "Odinstalowanie programów" "SKIP" "przerwano - pominięto pozostałe"; break }
+        Write-Log "Odinstalowuję: $($it.Name)"
+        try {
+            if ($it.Kind -eq 'Store') {
+                Remove-AppxPackage -Package $it.Package -AllUsers -ErrorAction Stop
+                if ($script:Opts.UninProvisioned) {
+                    foreach ($pp in @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq $it.Name })) {
+                        try { Remove-AppxProvisionedPackage -Online -PackageName $pp.PackageName -ErrorAction Stop | Out-Null } catch { }
+                    }
+                }
+                Set-Outcome "Odinstalowano: $($it.Name)" "OK" "aplikacja Sklepu"
+                continue
+            }
+
+            if ($it.Guid) {
+                $code = Invoke-External "msiexec.exe" "/x $($it.Guid) /qn /norestart"
+            } elseif ($it.Quiet) {
+                $code = Invoke-External "cmd.exe" "/c `"$($it.Quiet)`""
+            } else {
+                Write-Log "Brak trybu cichego - uruchamiam deinstalator widocznie, dokończ go w otwartym oknie..."
+                $code = Invoke-External "cmd.exe" "/c `"$($it.Cmd)`""
+            }
+
+            if ($code -eq 3010 -or $code -eq 1641) { $script:RebootNeeded = $true }
+            if ($code -eq 1605) { Set-Outcome "Odinstalowano: $($it.Name)" "SKIP" "już nieobecny"; continue }
+
+            $still = Get-InstalledApps | Where-Object { $_.DisplayName -eq $it.Name } | Select-Object -First 1
+            if ($code -ne 0 -and $code -ne 3010 -and $code -ne 1641) {
+                Set-Outcome "Odinstalowano: $($it.Name)" "ERR" "kod wyjścia: $code"
+            } elseif ($still -and $it.Mode -eq 'widoczna') {
+                Set-Outcome "Odinstalowano: $($it.Name)" "SKIP" "wpis nadal widoczny - czy deinstalacja została dokończona?"
+            } else {
+                Set-Outcome "Odinstalowano: $($it.Name)" "OK" "kod: $code"
+            }
+        } catch {
+            Set-Outcome "Odinstalowano: $($it.Name)" "ERR" $_.Exception.Message
+        }
+    }
+}
+
+# ------------------------------------------------------------
+#  Autostart (jak w Menedzerze zadan: StartupApproved)
+# ------------------------------------------------------------
+function Get-AutostartDisabled {
+    param([string]$Approved, [string]$Name)
+    try {
+        $v = (Get-ItemProperty -Path $Approved -Name $Name -ErrorAction Stop).$Name
+        if ($v -is [byte[]] -and $v.Length -gt 0) { return (($v[0] -band 1) -eq 1) }
+    } catch { }
+    return $false
+}
+
+function Set-AutostartDisabled {
+    param([string]$Approved, [string]$Name, [bool]$Disabled)
+    if (-not (Test-Path $Approved)) { New-Item -Path $Approved -Force | Out-Null }
+    $b = New-Object byte[] 12
+    $b[0] = $(if ($Disabled) { 3 } else { 2 })
+    Set-ItemProperty -Path $Approved -Name $Name -Value $b -Type Binary -Force
+}
+
+function Get-AutostartList {
+    $list = New-Object System.Collections.ArrayList
+    $apr = "Microsoft\Windows\CurrentVersion\Explorer\StartupApproved"
+    $runKeys = @(
+        @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run';             Approved = "HKLM:\SOFTWARE\$apr\Run";   Source = 'HKLM Run' },
+        @{ Path = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'; Approved = "HKLM:\SOFTWARE\$apr\Run32"; Source = 'HKLM Run (32-bit)' },
+        @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run';             Approved = "HKCU:\SOFTWARE\$apr\Run";   Source = 'HKCU Run' }
+    )
+    $skip = 'PSPath', 'PSParentPath', 'PSChildName', 'PSDrive', 'PSProvider'
+    foreach ($k in $runKeys) {
+        if (-not (Test-Path $k.Path)) { continue }
+        $props = Get-ItemProperty -Path $k.Path
+        foreach ($p in $props.PSObject.Properties) {
+            if ($skip -contains $p.Name) { continue }
+            [void]$list.Add([pscustomobject]@{
+                Name = $p.Name; Command = [string]$p.Value; Source = $k.Source; Approved = $k.Approved
+                Disabled = (Get-AutostartDisabled $k.Approved $p.Name)
+            })
+        }
+    }
+    $folders = @(
+        @{ Path = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"; Approved = "HKLM:\SOFTWARE\$apr\StartupFolder"; Source = 'Autostart (wszyscy)' },
+        @{ Path = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup";     Approved = "HKCU:\SOFTWARE\$apr\StartupFolder"; Source = 'Autostart (użytkownik)' }
+    )
+    foreach ($f in $folders) {
+        foreach ($i in @(Get-ChildItem -LiteralPath $f.Path -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'desktop.ini' })) {
+            [void]$list.Add([pscustomobject]@{
+                Name = $i.Name; Command = $i.FullName; Source = $f.Source; Approved = $f.Approved
+                Disabled = (Get-AutostartDisabled $f.Approved $i.Name)
+            })
+        }
+    }
+    return @($list | Sort-Object Name)
+}
+
+function Step-Autostart {
+    param($Changes)
+    $changes = @($Changes)
+    if (Test-Dry "Autostart" "zmian: $($changes.Count)") { return }
+    $off = 0; $on = 0
+    foreach ($c in $changes) {
+        try {
+            Set-AutostartDisabled $c.Approved $c.Name ([bool]$c.Disable)
+            if ($c.Disable) { $off++; Write-Log "Wyłączono autostart: $($c.Name)" "INFO" } else { $on++; Write-Log "Przywrócono autostart: $($c.Name)" "INFO" }
+        } catch { Set-Outcome "Autostart: $($c.Name)" "ERR" $_.Exception.Message }
+    }
+    Set-Outcome "Autostart" "OK" "wyłączono: $off, przywrócono: $on (zmiana widoczna po ponownym zalogowaniu)"
+}
+
+# ------------------------------------------------------------
+#  UrBackup - adres serwera
+# ------------------------------------------------------------
+function Step-UrBackupServer {
+    $srv = $script:Opts.UrServer
+    if (Test-Dry "UrBackup - serwer" $srv) { return }
+    $pc  = if ($script:Opts.NewName) { $script:Opts.NewName } else { $env:COMPUTERNAME }
+    $ips = (Get-LocalIPv4) -join ", "
+
+    if (Test-TcpPort $srv 55414) { Set-Outcome "UrBackup - serwer" "OK" "serwer $srv odpowiada (panel www, port 55414)" }
+    else { Set-Outcome "UrBackup - serwer" "SKIP" "serwer $srv nie odpowiada na porcie 55414 - sprawdź adres i zaporę" }
+
+    Add-Todo "UrBackup: w panelu serwera ($srv, port 55414) dodaj klienta «$pc» (IP: $ips) i upewnij się, że jest widoczny jako online"
+}
+
+# ------------------------------------------------------------
+#  Znacznik "komputer przygotowany"
+# ------------------------------------------------------------
+function Get-PreparedMarker {
+    try {
+        $k = "HKLM:\SOFTWARE\PrepareWorkstation"
+        if (Test-Path $k) { $p = Get-ItemProperty $k; if ($p.LastRun) { return $p } }
+    } catch { }
+    return $null
+}
+
+function Set-PreparedMarker {
+    try {
+        $k = "HKLM:\SOFTWARE\PrepareWorkstation"
+        New-Item -Path $k -Force | Out-Null
+        $steps = (@($script:Results | Where-Object { $_.Status -eq 'OK' } | ForEach-Object { $_.Step }) -join "; ")
+        if ($steps.Length -gt 1800) { $steps = $steps.Substring(0, 1800) + "..." }
+        Set-ItemProperty -Path $k -Name "Version" -Value $AppVersion -Force
+        Set-ItemProperty -Path $k -Name "LastRun" -Value (Get-Date -Format "yyyy-MM-dd HH:mm") -Force
+        Set-ItemProperty -Path $k -Name "Steps"   -Value $steps -Force
+    } catch { Write-Log "Nie udało się zapisać znacznika przygotowania: $($_.Exception.Message)" "SKIP" }
+}
+
+# ------------------------------------------------------------
+#  Lista "do zrobienia recznie"
+# ------------------------------------------------------------
+function Build-Todo {
+    $pc  = if ($script:Opts.NewName -and -not $script:ResumeMode) { $script:Opts.NewName } else { $env:COMPUTERNAME }
+    $ids = @($script:InstalledNow | ForEach-Object { [string]$_.id })
+
+    Add-Todo "Dołącz komputer do domeny, uruchom ponownie i zaloguj się kontem domenowym"
+    if ($script:Opts.NewName -and -not $script:ResumeMode) { Add-Todo "Nazwa komputera «$($script:Opts.NewName)» wejdzie w życie po restarcie" }
+
+    if ($ids -contains 'office') { Add-Todo "Office: zaloguj się kontem Microsoft 365 lub aktywuj licencję (Plik -> Konto)" }
+    if (($ids -contains 'eset') -and -not $script:Opts.EsetKey) { Add-Todo "ESET: zainstalowany bez klucza - aktywuj licencję (okno programu lub konsola ESET)" }
+    if ($ids -contains 'anydesk') {
+        $id = Get-AnyDeskId
+        if ($id) { Add-Todo "AnyDesk: ID tego komputera ($pc) = $id - zapisz w ewidencji" }
+        else     { Add-Todo "AnyDesk: nie udało się odczytać ID automatycznie - odczytaj w oknie AnyDesk i zapisz w ewidencji" }
+    }
+    if (($ids -contains 'urbackup') -and -not $script:Opts.UrServer) {
+        Add-Todo "UrBackup: zainstalowany - upewnij się, że serwer widzi klienta «$pc» (lub dodaj go ręcznie w panelu serwera)"
+    }
+    foreach ($r in $script:Results) {
+        if ($r.Status -eq 'ERR') { Add-Todo "Sprawdź / napraw: $($r.Step) - $($r.Detail)" }
+        elseif ($r.Status -eq 'SKIP' -and $r.Detail -like 'brak pliku*') { Add-Todo "Zainstaluj ręcznie: $($r.Step) ($($r.Detail))" }
+    }
+    if ($script:WuInstalled) { Add-Todo "Po restarcie uruchom Windows Update ponownie - mogą być kolejne aktualizacje" }
+    if ($script:RebootNeeded) { Add-Todo "Zrestartuj komputer" }
+}
+
+function Write-TodoFile {
+    Build-Todo
+    $pc = if ($script:Opts.NewName -and -not $script:ResumeMode) { $script:Opts.NewName } else { $env:COMPUTERNAME }
+    $lines = @(
+        "LISTA DO ZROBIENIA RĘCZNIE",
+        "==========================",
+        "Komputer: $pc",
+        "Data:     $(Get-Date -Format 'yyyy-MM-dd HH:mm')",
+        "IP:       $((Get-LocalIPv4) -join ', ')",
+        "Program:  Prepare Workstation $AppVersion",
+        ""
+    )
+    Write-Log "" "INFO"
+    Write-Log "============ DO ZROBIENIA RĘCZNIE ============" "STEP"
+    $i = 0
+    foreach ($t in $script:Todo) {
+        $i++
+        $lines += ("[ ] {0}. {1}" -f $i, $t)
+        Write-Log ("[ ] {0}. {1}" -f $i, $t) "INFO"
+    }
+
+    $fileName = "DO-ZROBIENIA-{0}-{1:yyyyMMdd-HHmm}.txt" -f $pc, (Get-Date)
+    foreach ($d in @($script:Opts.InstallerPath, $LogDir)) {
+        if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }
+        try {
+            $path = Join-Path $d $fileName
+            [System.IO.File]::WriteAllText($path, ($lines -join "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+            Write-Log "Lista do zrobienia zapisana: $path" "OK"
+            return $path
+        } catch { }
+    }
+    Write-Log "Nie udało się zapisać pliku z listą do zrobienia" "ERR"
+    return $null
+}
+
+# ------------------------------------------------------------
+#  Sprawdzenie gotowosci
+# ------------------------------------------------------------
+function Get-Readiness {
+    param([string]$Folder, [string]$UrServer)
+    $r = New-Object System.Collections.ArrayList
+    $add = { param($s, $n, $d) [void]$r.Add([pscustomobject]@{ Status = $s; Name = $n; Detail = $d }) }
+
+    # system
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        if ($os.Caption -match 'Home') { & $add 'ERR' 'System' "$($os.Caption) - wersja Home nie umożliwia dołączenia do domeny" }
+        else { & $add 'OK' 'System' "$($os.Caption) (build $($os.BuildNumber))" }
+    } catch { & $add 'WARN' 'System' 'nie udało się odczytać wersji systemu' }
+
+    # domena
+    try {
+        $cs = Get-CimInstance Win32_ComputerSystem
+        if ($cs.PartOfDomain) { & $add 'OK' 'Domena' "komputer jest w domenie $($cs.Domain)" }
+        else { & $add 'OK' 'Domena' "poza domeną (grupa robocza: $($cs.Workgroup)) - do dołączenia ręcznie" }
+    } catch { }
+
+    # instalatory
+    try {
+        $have = @(); $miss = @()
+        foreach ($a in $script:Catalog) {
+            if (Test-Path -LiteralPath (Resolve-Installer $a.file $Folder)) { $have += $a.name } else { $miss += $a.name }
+        }
+        if ($have.Count -eq 0) { & $add 'ERR' 'Instalatory' "nie znaleziono żadnego instalatora (folder: $Folder)" }
+        elseif ($miss.Count -gt 0) { & $add 'WARN' 'Instalatory' "znaleziono $($have.Count) z $($script:Catalog.Count); brakuje: $($miss -join ', ')" }
+        else { & $add 'OK' 'Instalatory' "wszystkie pliki na miejscu ($($have.Count))" }
+    } catch { }
+
+    # internet
+    try {
+        if (Test-TcpPort "www.msftconnecttest.com" 80 3000) { & $add 'OK' 'Internet' 'dostępny' }
+        else { & $add 'WARN' 'Internet' 'brak połączenia z internetem (potrzebny dla Windows Update)' }
+    } catch { }
+
+    # zasilanie i bateria
+    try {
+        $bat = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
+        if ($bat.Count -eq 0) { & $add 'OK' 'Zasilanie' 'komputer bez baterii (stacjonarny)' }
+        else {
+            $pct = $bat[0].EstimatedChargeRemaining
+            if ($bat[0].BatteryStatus -eq 1) { & $add 'WARN' 'Zasilanie' "praca na baterii ($pct%) - podłącz zasilacz" }
+            else { & $add 'OK' 'Zasilanie' "zasilacz podłączony (bateria $pct%)" }
+            try {
+                $full = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryFullChargedCapacity -ErrorAction Stop)[0].FullChargedCapacity
+                $des  = @(Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData -ErrorAction Stop)[0].DesignedCapacity
+                if ($des -gt 0) {
+                    $h = [int](100 * $full / $des)
+                    if ($h -lt 60) { & $add 'WARN' 'Bateria' "zużyta: pojemność $h% pojemności fabrycznej" } else { & $add 'OK' 'Bateria' "pojemność $h% fabrycznej" }
+                }
+            } catch { }
+        }
+    } catch { }
+
+    # miejsce na dysku
+    try {
+        $drv = Get-PSDrive -Name ($env:SystemDrive.TrimEnd(':'))
+        $free = [math]::Round($drv.Free / 1GB, 1)
+        if ($free -lt 10) { & $add 'ERR' 'Miejsce na dysku' "tylko $free GB wolnego na $env:SystemDrive" }
+        elseif ($free -lt 20) { & $add 'WARN' 'Miejsce na dysku' "$free GB wolnego na $env:SystemDrive" }
+        else { & $add 'OK' 'Miejsce na dysku' "$free GB wolnego na $env:SystemDrive" }
+    } catch { }
+
+    # zdrowie dyskow
+    try {
+        $disks = @(Get-PhysicalDisk -ErrorAction Stop)
+        $bad = @($disks | Where-Object { $_.HealthStatus -ne 'Healthy' })
+        if ($bad.Count -gt 0) { & $add 'WARN' 'Dyski' "problem ze zdrowiem: $(($bad | ForEach-Object { "$($_.FriendlyName): $($_.HealthStatus)" }) -join '; ')" }
+        elseif ($disks.Count -gt 0) { & $add 'OK' 'Dyski' "stan dobry: $(($disks | ForEach-Object { $_.FriendlyName }) -join ', ')" }
+    } catch { }
+
+    # oczekujacy restart
+    try {
+        $pend = (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
+                (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') -or
+                ($null -ne (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue))
+        if ($pend) { & $add 'WARN' 'Restart' 'system oczekuje na restart - zrestartuj przed instalacją' } else { & $add 'OK' 'Restart' 'brak oczekującego restartu' }
+    } catch { }
+
+    # antywirus
+    try {
+        $av = @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object { $_.displayName })
+        $other = @($av | Where-Object { $_ -notmatch 'ESET|Windows Defender|Microsoft Defender' })
+        if ($other.Count -gt 0) { & $add 'WARN' 'Antywirus' "wykryto inny antywirus: $($other -join ', ') - konflikt z ESET, usuń go przed instalacją" }
+        elseif ($av.Count -gt 0) { & $add 'OK' 'Antywirus' ($av -join ', ') }
+    } catch { }
+
+    # aktywacja
+    try {
+        $lic = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationId='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" -ErrorAction Stop | Select-Object -First 1
+        if ($lic -and $lic.LicenseStatus -eq 1) { & $add 'OK' 'Aktywacja Windows' 'system aktywowany' }
+        else { & $add 'WARN' 'Aktywacja Windows' 'system nieaktywowany' }
+    } catch { }
+
+    # znacznik
+    $m = Get-PreparedMarker
+    if ($m) { & $add 'WARN' 'Poprzednie przygotowanie' "ten komputer był już przygotowany $($m.LastRun) (wersja $($m.Version))" }
+
+    # UrBackup
+    if ($UrServer) {
+        if (Test-TcpPort $UrServer 55414) { & $add 'OK' 'Serwer UrBackup' "$UrServer odpowiada (port 55414)" }
+        else { & $add 'WARN' 'Serwer UrBackup' "$UrServer nie odpowiada na porcie 55414" }
+    }
+    return @($r)
+}
+
+function Write-ReadinessLog {
+    param($Results)
+    $map = @{ OK = 'OK'; WARN = 'SKIP'; ERR = 'ERR' }
+    foreach ($x in $Results) { Write-Log "$($x.Name) - $($x.Detail)" $map[$x.Status] }
+}
+
+function Invoke-Readiness {
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    try { $res = Get-Readiness $txtPath.Text.Trim() $txtUrIp.Text.Trim() }
+    finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
+
+    $tabs.SelectedTab = $tabLog
+    Write-Log "Sprawdzenie gotowości" "STEP"
+    Write-ReadinessLog $res
+
+    $err  = @($res | Where-Object { $_.Status -eq 'ERR' })
+    $warn = @($res | Where-Object { $_.Status -eq 'WARN' })
+    $text = "Sprawdzenie gotowości zakończone.`n`nBłędy: $($err.Count)   Ostrzeżenia: $($warn.Count)   OK: $(@($res | Where-Object { $_.Status -eq 'OK' }).Count)"
+    $details = @($err + $warn | ForEach-Object { "- $($_.Name): $($_.Detail)" })
+    if ($details.Count -gt 0) { $text += "`n`n" + ($details -join "`n") }
+    $icon = if ($err.Count -gt 0) { "Error" } elseif ($warn.Count -gt 0) { "Warning" } else { "Information" }
+    [void](Show-Msg $text "Sprawdzenie gotowości" "OK" $icon)
+}
+
+# ------------------------------------------------------------
+#  Wznawianie po restarcie (po aktualizacjach Windows)
+# ------------------------------------------------------------
+$ResumeFile = Join-Path $env:ProgramData "PrepareWorkstation\resume.json"
+$ResumeTask = "PrepareWorkstation-Resume"
+
+function Remove-ResumeState {
+    try { Unregister-ScheduledTask -TaskName $ResumeTask -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    Remove-Item -LiteralPath $ResumeFile -Force -ErrorAction SilentlyContinue
+}
+
+function Register-ResumeTask {
+    try {
+        if ($PSCommandPath) {
+            $exe  = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+            $argl = "-NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File `"$PSCommandPath`" -Resume"
+        } else {
+            $exe  = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+            $argl = "-Resume"
+        }
+        $admins    = (New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-32-544').Translate([System.Security.Principal.NTAccount]).Value
+        $action    = New-ScheduledTaskAction -Execute $exe -Argument $argl
+        $trigger   = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -GroupId $admins -RunLevel Highest
+        $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName $ResumeTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+        return $true
+    } catch {
+        Write-Log "Nie udało się zarejestrować zadania wznowienia: $($_.Exception.Message)" "ERR"
+        return $false
+    }
+}
+
+function Save-ResumeState {
+    param($Remaining)
+    $planOut = @($Remaining | ForEach-Object {
+        $argData = $null
+        if ($_.Fn -eq 'Step-App') { $argData = [string]$_.Arg.id }
+        elseif ($_.Fn -eq 'Step-Uninstall') {
+            $argData = @($_.Arg | ForEach-Object { [pscustomobject]@{ Kind = $_.Kind; Name = $_.Name; Version = $_.Version; Mode = $_.Mode; Cmd = $_.Cmd; Quiet = $_.Quiet; Guid = $_.Guid; Package = $_.Package } })
+        }
+        elseif ($_.Fn -eq 'Step-Autostart') {
+            $argData = @($_.Arg | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Approved = $_.Approved; Disable = [bool]$_.Disable } })
+        }
+        [pscustomobject]@{ Name = $_.Name; Fn = $_.Fn; Arg = $argData }
+    })
+    $optsOut = @{}
+    foreach ($k in $script:Opts.Keys) { $optsOut[$k] = $script:Opts[$k] }
+    $optsOut['EsetKey'] = ""      # klucza nie zapisujemy na dysku
+
+    $state = [pscustomobject]@{
+        Version       = $AppVersion
+        Saved         = (Get-Date -Format "yyyy-MM-dd HH:mm")
+        Opts          = $optsOut
+        Plan          = $planOut
+        Results       = @($script:Results)
+        InstalledIds  = @($script:InstalledNow | ForEach-Object { [string]$_.id })
+        Todo          = @($script:Todo)
+        FileOverrides = $script:FileOverrides
+        WuInstalled   = [bool]$script:WuInstalled
+    }
+    $dir = Split-Path $ResumeFile -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $json = ConvertTo-Json -InputObject $state -Depth 8
+    [System.IO.File]::WriteAllText($ResumeFile, $json, (New-Object System.Text.UTF8Encoding($true)))
+}
+
+function Import-ResumeState {
+    $s = Get-Content -LiteralPath $ResumeFile -Raw -Encoding UTF8 | ConvertFrom-Json
+    $o = @{}
+    foreach ($p in $s.Opts.PSObject.Properties) { $o[$p.Name] = $p.Value }
+    $script:Opts = $o
+    $script:DryRun = $false
+    $script:ResumeMode = $true
+    $script:WuInstalled = [bool]$s.WuInstalled
+
+    $script:FileOverrides = @{}
+    if ($s.FileOverrides) {
+        foreach ($p in $s.FileOverrides.PSObject.Properties) { if (Test-Path -LiteralPath $p.Value) { $script:FileOverrides[$p.Name] = $p.Value } }
+    }
+    $script:Results.Clear()
+    foreach ($r in @($s.Results)) { [void]$script:Results.Add([pscustomobject]@{ Step = $r.Step; Status = $r.Status; Detail = $r.Detail }) }
+    $script:Todo.Clear()
+    foreach ($t in @($s.Todo)) { [void]$script:Todo.Add([string]$t) }
+    $script:InstalledNow = @()
+    foreach ($id in @($s.InstalledIds)) {
+        $a = $script:Catalog | Where-Object { [string]$_.id -eq $id } | Select-Object -First 1
+        if ($a) { $script:InstalledNow += $a }
+    }
+
+    $plan = @()
+    foreach ($p in @($s.Plan)) {
+        $arg = $p.Arg
+        if ($p.Fn -eq 'Step-App') { $arg = $script:Catalog | Where-Object { [string]$_.id -eq [string]$p.Arg } | Select-Object -First 1 }
+        $plan += [pscustomobject]@{ Name = $p.Name; Fn = $p.Fn; Arg = $arg }
+    }
+    return $plan
+}
+
 function Show-Summary {
     $ok   = @($script:Results | Where-Object Status -eq 'OK').Count
     $skip = @($script:Results | Where-Object Status -eq 'SKIP').Count
@@ -621,10 +1226,17 @@ function Show-Summary {
     Write-Log "OK: $ok   Pominięte: $skip   Błędy: $err   Symulacja: $dry" "INFO"
     foreach ($r in ($script:Results | Where-Object Status -eq 'ERR')) { Write-Log "$($r.Step): $($r.Detail)" "ERR" }
     Write-Log "Log zapisano: $LogFile" "INFO"
-    if ($script:Opts.CopyLog -and -not $script:DryRun) { Copy-LogToUsb }
+
+    $todoPath = $null
+    if (-not $script:DryRun) {
+        Set-PreparedMarker
+        $todoPath = Write-TodoFile
+        if ($script:Opts.CopyLog) { Copy-LogToUsb }
+    }
 
     $text = "Gotowe.`n`nOK: $ok`nPominięte: $skip`nBłędy: $err"
     if ($dry -gt 0) { $text = "Tryb testowy - nic nie zostało zmienione.`n`nKroków w symulacji: $dry" }
+    if ($todoPath) { $text += "`n`nLista do zrobienia ręcznie:`n$todoPath" }
     $icon = if ($err -gt 0) { "Warning" } else { "Information" }
 
     if ($script:RebootNeeded -and -not $script:DryRun) {
@@ -636,6 +1248,94 @@ function Show-Summary {
     }
 }
 
+# Wykonuje plan krok po kroku. Po aktualizacjach Windows wymagajacych restartu mozna zapisac stan,
+# zrestartowac komputer i dokonczyc pozostale kroki po zalogowaniu (zadanie harmonogramu).
+function Invoke-Plan {
+    param($Plan, [bool]$Resumed = $false)
+    $Plan = @($Plan)
+
+    $script:Cancel = $false
+    $script:Resuming = $false
+    $script:Running = $true
+    if (-not $Resumed) { $script:LogBox.Clear() }
+    $tabs.SelectedTab = $tabLog
+    foreach ($c in $busyControls) { $c.Enabled = $false }
+    $btnCancel.Enabled = $true
+    $progress.Maximum = [Math]::Max($Plan.Count, 1)
+    $progress.Value = 0
+
+    Write-Log "Prepare Workstation $AppVersion - start: $env:COMPUTERNAME, Windows $([Environment]::OSVersion.Version), użytkownik $env:USERNAME" "INFO"
+    if ($Resumed)         { Write-Log "Wznowienie po restarcie - pozostało kroków: $($Plan.Count)" "STEP" }
+    if ($script:DryRun)   { Write-Log "TRYB TESTOWY - żadne zmiany nie są wprowadzane" "DRY" }
+
+    $i = 0
+    foreach ($s in $Plan) {
+        if ($script:Cancel) { Set-Outcome "Przerwano" "SKIP" "pominięto pozostałe kroki ($($Plan.Count - $i))"; break }
+        $lblStatus.Text = "Krok $($i + 1)/$($Plan.Count): $($s.Name)"
+        Write-Log $s.Name "STEP"
+        try {
+            if ($s.Arg) { & $s.Fn $s.Arg } else { & $s.Fn }
+        } catch {
+            Set-Outcome $s.Name "ERR" $_.Exception.Message
+        }
+        $i++
+        $progress.Value = $i
+
+        if ($s.Fn -eq 'Step-WindowsUpdateInstall' -and $script:RebootNeeded -and -not $script:DryRun) {
+            $remaining = @($Plan | Select-Object -Skip $i)
+            if ($remaining.Count -gt 0) {
+                $ans = Show-Msg ("Aktualizacje Windows wymagają restartu.`n`nPozostało kroków: $($remaining.Count).`n`n" +
+                                 "TAK - zrestartuj teraz; po zalogowaniu (konto administratora) program dokończy resztę.`n" +
+                                 "NIE - kontynuuj bez restartu.") `
+                                "Restart po aktualizacjach" "YesNo" "Question"
+                if ($ans -eq 'Yes') {
+                    try {
+                        Save-ResumeState $remaining
+                        if (Register-ResumeTask) { $script:Resuming = $true; break }
+                        Remove-ResumeState
+                    } catch {
+                        Write-Log "Nie udało się zapisać stanu do wznowienia: $($_.Exception.Message)" "ERR"
+                        Remove-ResumeState
+                    }
+                }
+            }
+        }
+    }
+
+    $script:Running = $false
+    if ($script:Resuming) {
+        $lblStatus.Text = "Restart..."
+        Write-Log "Zapisano stan. Komputer zostanie zrestartowany - po zalogowaniu program dokończy pozostałe kroki." "INFO"
+        Start-Sleep -Seconds 2
+        Restart-Computer -Force
+        return
+    }
+
+    $lblStatus.Text = "Zakończono."
+    foreach ($c in $busyControls) { $c.Enabled = $true }
+    $btnCancel.Enabled = $false
+    Show-Summary
+}
+
+function Invoke-Resume {
+    if (-not (Test-Path -LiteralPath $ResumeFile)) {
+        Remove-ResumeState
+        [void](Show-Msg "Brak zapisanego stanu do wznowienia." "Prepare Workstation" "OK" "Information")
+        return
+    }
+    try { $plan = Import-ResumeState } catch {
+        [void](Show-Msg "Nie można wczytać zapisanego stanu:`n$($_.Exception.Message)" "Prepare Workstation" "OK" "Error")
+        Remove-ResumeState
+        return
+    }
+    $ans = Show-Msg ("Wznowienie przygotowania komputera po restarcie.`n`nPozostało kroków: $($plan.Count):`n- " +
+                     (($plan | ForEach-Object { $_.Name }) -join "`n- ") + "`n`nKontynuować?") `
+                    "Wznowienie" "YesNo" "Question"
+    Remove-ResumeState
+    if ($ans -ne 'Yes') { return }
+    Invoke-Plan $plan $true
+}
+
 function Start-Setup {
     $name = $txtName.Text.Trim()
     $renameWanted = ($name -ne "" -and $name -ne $env:COMPUTERNAME)
@@ -643,29 +1343,43 @@ function Start-Setup {
         [void](Show-Msg "Nieprawidłowa nazwa komputera (litery, cyfry, myślniki; max 15 znaków; nie same cyfry)." "Błąd" "OK" "Warning")
         return
     }
-
     if ($chkChrome.Checked -and $txtChrome.Text.Trim() -notmatch '^https?://\S+$') {
         [void](Show-Msg "Adres strony startowej Chrome musi zaczynać się od http:// lub https://" "Błąd" "OK" "Warning")
         return
     }
+    $ur = $txtUrIp.Text.Trim()
+    if ($ur -and $ur -notmatch '^[A-Za-z0-9\.\-]{1,253}$') {
+        [void](Show-Msg "Nieprawidłowy adres serwera UrBackup (adres IP lub nazwa hosta)." "Błąd" "OK" "Warning")
+        return
+    }
 
     $o = @{}
-    $o.InstallerPath = $txtPath.Text.Trim()
-    $o.NewName       = if ($renameWanted) { $name } else { $null }
-    $o.PowerPlan     = $chkPlan.Checked
-    $o.PowerNever    = $chkNever.Checked
-    $o.Hibernate     = $chkHib.Checked
-    $o.ScreenSaver   = $chkSaver.Checked
-    $o.SkipInstalled = $chkSkipInst.Checked
-    $o.EsetKey       = $txtEset.Text.Trim()
-    $o.TimeZone      = [string]$cmbTz.SelectedItem
-    $o.Hash          = $chkHash.Checked
-    $o.ChromeUrl     = $txtChrome.Text.Trim()
-    $o.CopyLog       = $chkCopyLog.Checked
-    $script:Opts     = $o
-    $script:DryRun   = $chkDry.Checked
+    $o.InstallerPath   = $txtPath.Text.Trim()
+    $o.NewName         = if ($renameWanted) { $name } else { $null }
+    $o.PowerPlan       = $chkPlan.Checked
+    $o.PowerNever      = $chkNever.Checked
+    $o.Hibernate       = $chkHib.Checked
+    $o.ScreenSaver     = $chkSaver.Checked
+    $o.SkipInstalled   = $chkSkipInst.Checked
+    $o.EsetKey         = $txtEset.Text.Trim()
+    $o.TimeZone        = [string]$cmbTz.SelectedItem
+    $o.Hash            = $chkHash.Checked
+    $o.ChromeUrl       = $txtChrome.Text.Trim()
+    $o.CopyLog         = $chkCopyLog.Checked
+    $o.UrServer        = $ur
+    $o.UninProvisioned = $chkUninProv.Checked
+    $script:Opts       = $o
+    $script:DryRun     = $chkDry.Checked
 
-    $apps = @($lvApps.CheckedItems | ForEach-Object { $_.Tag })
+    $apps  = @($lvApps.CheckedItems | ForEach-Object { $_.Tag })
+    $unin  = @($script:UninstallCache | Where-Object { $script:UninSel.ContainsKey("$($_.Kind)|$($_.Name)|$($_.Version)") })
+    $autoChanges = @()
+    foreach ($it in $lvAuto.Items) {
+        $a = $it.Tag
+        if ($it.Checked -ne [bool]$a.Disabled) {
+            $autoChanges += [pscustomobject]@{ Name = $a.Name; Approved = $a.Approved; Disable = $it.Checked }
+        }
+    }
 
     # --- plan ---
     $plan = @()
@@ -675,14 +1389,18 @@ function Start-Setup {
                                $plan += [pscustomobject]@{ Name = "Ustawienia zasilania";       Fn = "Step-Power";        Arg = $null } }
     if ($chkMcAfee.Checked)  { $plan += [pscustomobject]@{ Name = "Usuwanie McAfee";            Fn = "Step-McAfee";       Arg = $null } }
     if ($chkOffice.Checked)  { $plan += [pscustomobject]@{ Name = "Usuwanie starego Office";    Fn = "Step-Office";       Arg = $null } }
+    if ($unin.Count -gt 0)   { $plan += [pscustomobject]@{ Name = "Odinstalowanie programów ($($unin.Count))"; Fn = "Step-Uninstall"; Arg = $unin } }
     foreach ($a in $apps)    { $plan += [pscustomobject]@{ Name = "Instalacja: $($a.name)";     Fn = "Step-App";          Arg = $a } }
     if ($chkVerify.Checked -and $apps.Count -gt 0) {
                                $plan += [pscustomobject]@{ Name = "Weryfikacja instalacji";     Fn = "Step-Verify";       Arg = $null } }
+    if ($ur)                 { $plan += [pscustomobject]@{ Name = "UrBackup - serwer $ur";      Fn = "Step-UrBackupServer"; Arg = $null } }
+    if ($autoChanges.Count -gt 0) {
+                               $plan += [pscustomobject]@{ Name = "Autostart (zmian: $($autoChanges.Count))"; Fn = "Step-Autostart"; Arg = $autoChanges } }
     if ($chkTz.Checked)      { $plan += [pscustomobject]@{ Name = "Strefa czasowa";             Fn = "Step-TimeZone";     Arg = $null } }
     if ($chkExt.Checked)     { $plan += [pscustomobject]@{ Name = "Eksplorator plików";         Fn = "Step-FileExt";      Arg = $null } }
     if ($chkThisPC.Checked)  { $plan += [pscustomobject]@{ Name = "Ikona Ten komputer";         Fn = "Step-ThisPC";       Arg = $null } }
     if ($chkAds.Checked)       { $plan += [pscustomobject]@{ Name = "Wyłączenie reklam i sugestii"; Fn = "Step-Ads";          Arg = $null } }
-    if ($chkDebloat.Checked)   { $plan += [pscustomobject]@{ Name = "Usuwanie zbędnych aplikacji Windows"; Fn = "Step-Debloat"; Arg = $null } }
+    if ($chkNoFb.Checked)      { $plan += [pscustomobject]@{ Name = "Bez pytań o opinię i podpowiedzi"; Fn = "Step-NoFeedback"; Arg = $null } }
     if ($chkLang.Checked)      { $plan += [pscustomobject]@{ Name = "Region i język: polski";    Fn = "Step-Language";     Arg = $null } }
     if ($chkShortcuts.Checked) { $plan += [pscustomobject]@{ Name = "Skróty na pulpicie";        Fn = "Step-Shortcuts";    Arg = $null } }
     if ($chkChrome.Checked)    { $plan += [pscustomobject]@{ Name = "Chrome - strona startowa";  Fn = "Step-ChromePolicy"; Arg = $null } }
@@ -697,46 +1415,28 @@ function Start-Setup {
         return
     }
 
+    # --- ostrzezenia przed startem ---
+    $notes = ""
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    try { $ready = Get-Readiness $o.InstallerPath $ur } finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
+    $bad = @($ready | Where-Object { $_.Status -eq 'ERR' })
+    if ($bad.Count -gt 0) { $notes += "`n`nUWAGA - problemy wykryte przy sprawdzeniu gotowości:`n" + (($bad | ForEach-Object { "- $($_.Name): $($_.Detail)" }) -join "`n") }
+    $m = Get-PreparedMarker
+    if ($m -and -not $script:DryRun) { $notes += "`n`nUWAGA: ten komputer był już przygotowany $($m.LastRun) (wersja $($m.Version))." }
+
     $mode = if ($script:DryRun) { "TRYB TESTOWY (symulacja)" } else { "Zmiany zostaną wprowadzone w systemie" }
-    $r = Show-Msg ("$mode`n`nKroki ($($plan.Count)):`n- " + (($plan | ForEach-Object { $_.Name }) -join "`n- ") + "`n`nKontynuować?") `
+    $r = Show-Msg ("$mode`n`nKroki ($($plan.Count)):`n- " + (($plan | ForEach-Object { $_.Name }) -join "`n- ") + $notes + "`n`nKontynuować?") `
                   "Potwierdzenie" "YesNo" "Question"
     if ($r -ne 'Yes') { return }
 
     # --- wykonanie ---
     $script:Results.Clear()
-    $script:Cancel = $false
+    $script:Todo.Clear()
     $script:RebootNeeded = $false
+    $script:WuInstalled = $false
+    $script:ResumeMode = $false
     $script:InstalledNow = @()
-    $script:Running = $true
-    $script:LogBox.Clear()
-    $tabs.SelectedTab = $tabLog
-    foreach ($c in $busyControls) { $c.Enabled = $false }
-    $btnCancel.Enabled = $true
-    $progress.Maximum = $plan.Count
-    $progress.Value = 0
-
-    Write-Log "Prepare Workstation $AppVersion - start: $env:COMPUTERNAME, Windows $([Environment]::OSVersion.Version), użytkownik $env:USERNAME" "INFO"
-    if ($script:DryRun) { Write-Log "TRYB TESTOWY - żadne zmiany nie są wprowadzane" "DRY" }
-
-    $i = 0
-    foreach ($s in $plan) {
-        if ($script:Cancel) { Set-Outcome "Przerwano" "SKIP" "pominięto pozostałe kroki ($($plan.Count - $i))"; break }
-        $lblStatus.Text = "Krok $($i + 1)/$($plan.Count): $($s.Name)"
-        Write-Log $s.Name "STEP"
-        try {
-            if ($s.Arg) { & $s.Fn $s.Arg } else { & $s.Fn }
-        } catch {
-            Set-Outcome $s.Name "ERR" $_.Exception.Message
-        }
-        $i++
-        $progress.Value = $i
-    }
-
-    $lblStatus.Text = "Zakończono."
-    $script:Running = $false
-    foreach ($c in $busyControls) { $c.Enabled = $true }
-    $btnCancel.Enabled = $false
-    Show-Summary
+    Invoke-Plan $plan $false
 }
 
 # ============================================================
@@ -776,10 +1476,14 @@ $tabs     = New-Object System.Windows.Forms.TabControl
 $tabs.Dock = "Fill"
 $tabSet   = New-Object System.Windows.Forms.TabPage "Ustawienia"
 $tabApps  = New-Object System.Windows.Forms.TabPage "Aplikacje"
+$tabUnin  = New-Object System.Windows.Forms.TabPage "Odinstaluj"
+$tabAuto  = New-Object System.Windows.Forms.TabPage "Autostart"
 $tabLog   = New-Object System.Windows.Forms.TabPage "Przebieg"
 $tabSet.AutoScroll = $true
 [void]$tabs.TabPages.Add($tabSet)
 [void]$tabs.TabPages.Add($tabApps)
+[void]$tabs.TabPages.Add($tabUnin)
+[void]$tabs.TabPages.Add($tabAuto)
 [void]$tabs.TabPages.Add($tabLog)
 $form.Controls.Add($tabs)       # Fill dodajemy jako pierwszy
 
@@ -838,7 +1542,7 @@ $lblEsetHint.ForeColor = [System.Drawing.Color]::Gray
 
 $gMore = New-Group "Dodatkowe funkcje" 444 328 440 178 $tabSet
 $chkAds       = New-Check "Wyłącz reklamy i sugestie w Windows (Start, ekran blokady)"  12 22 416 $gMore
-$chkDebloat   = New-Check "Usuń zbędne aplikacje Windows (Xbox, Solitaire, Bing, Skype...)" 12 46 416 $gMore $false
+$chkNoFb      = New-Check "Bez pytań o opinię i podpowiedzi (Feedback, Spotlight, porady)" 12 46 416 $gMore
 $chkLang      = New-Check "Region i język: polski (pl-PL), klawiatura polska programisty" 12 70 416 $gMore $false
 $chkShortcuts = New-Check "Skróty na pulpicie: Chrome, Word, Excel, Outlook, Adobe Reader" 12 94 416 $gMore
 $chkChrome    = New-Check "Chrome: strona startowa firmy (zasada Chrome Enterprise)"    12 118 416 $gMore $false
@@ -881,6 +1585,15 @@ $btnAddFiles = New-Ctl System.Windows.Forms.Button "Dodaj pliki..."    492 8 100
 $btnUsb      = New-Ctl System.Windows.Forms.Button "Znajdź na pendrive" 600 8 130 28 $appsBar
 $btnHash     = New-Ctl System.Windows.Forms.Button "Zapisz sumy SHA256" 738 8 140 28 $appsBar
 
+$urBar = New-Object System.Windows.Forms.Panel
+$urBar.Dock = "Bottom"
+$urBar.Height = 36
+$tabApps.Controls.Add($urBar)
+[void](New-Label "Serwer UrBackup (adres IP):" 8 10 170 20 $urBar)
+$txtUrIp = New-Ctl System.Windows.Forms.TextBox "" 180 7 160 23 $urBar
+$lblUrHint = New-Label "opcjonalnie - sprawdzę połączenie z serwerem i dopiszę instrukcję do listy «do zrobienia»" 352 10 520 18 $urBar
+$lblUrHint.ForeColor = [System.Drawing.Color]::Gray
+
 $lblDrop = New-Object System.Windows.Forms.Label
 $lblDrop.Dock = "Top"
 $lblDrop.Height = 26
@@ -888,6 +1601,57 @@ $lblDrop.TextAlign = "MiddleLeft"
 $lblDrop.ForeColor = [System.Drawing.Color]::DimGray
 $lblDrop.Text = "  Przeciągnij na okno pliki instalatorów lub cały folder z pendrive'a - program rozpozna je po nazwie i użyje bezpośrednio z pendrive'a."
 $tabApps.Controls.Add($lblDrop)
+
+# --- zakladka: Odinstaluj ---
+$lvUnin = New-Object System.Windows.Forms.ListView
+$lvUnin.Dock = "Fill"
+$lvUnin.View = "Details"
+$lvUnin.CheckBoxes = $true
+$lvUnin.FullRowSelect = $true
+$lvUnin.GridLines = $true
+[void]$lvUnin.Columns.Add("Nazwa", 300)
+[void]$lvUnin.Columns.Add("Wersja", 90)
+[void]$lvUnin.Columns.Add("Wydawca", 180)
+[void]$lvUnin.Columns.Add("Rozmiar", 70)
+[void]$lvUnin.Columns.Add("Typ", 110)
+[void]$lvUnin.Columns.Add("Tryb", 90)
+$tabUnin.Controls.Add($lvUnin)
+
+$uninTop = New-Object System.Windows.Forms.Panel
+$uninTop.Dock = "Top"
+$uninTop.Height = 70
+$tabUnin.Controls.Add($uninTop)
+[void](New-Label "Szukaj:" 8 11 50 20 $uninTop)
+$txtUninFilter = New-Ctl System.Windows.Forms.TextBox "" 60 8 220 23 $uninTop
+$chkUninAll    = New-Check "Pokaż także komponenty i aktualizacje" 296 8 260 $uninTop $false
+$chkUninProv   = New-Check "Sklep: usuń też dla nowych użytkowników" 560 8 320 $uninTop
+$btnUninRefresh = New-Ctl System.Windows.Forms.Button "Odśwież listę" 8 36 110 28 $uninTop
+$btnUninJunk    = New-Ctl System.Windows.Forms.Button "Zaznacz typowe zbędne" 126 36 170 28 $uninTop
+$btnUninNone    = New-Ctl System.Windows.Forms.Button "Odznacz wszystkie" 304 36 130 28 $uninTop
+$lblUninHint = New-Label "Lista jak w Ustawienia - Aplikacje. Zaznaczone zostaną odinstalowane przed instalacją nowych programów." 442 41 440 18 $uninTop
+$lblUninHint.ForeColor = [System.Drawing.Color]::Gray
+
+# --- zakladka: Autostart ---
+$lvAuto = New-Object System.Windows.Forms.ListView
+$lvAuto.Dock = "Fill"
+$lvAuto.View = "Details"
+$lvAuto.CheckBoxes = $true
+$lvAuto.FullRowSelect = $true
+$lvAuto.GridLines = $true
+[void]$lvAuto.Columns.Add("Nazwa", 210)
+[void]$lvAuto.Columns.Add("Polecenie", 360)
+[void]$lvAuto.Columns.Add("Źródło", 150)
+[void]$lvAuto.Columns.Add("Stan", 90)
+$tabAuto.Controls.Add($lvAuto)
+
+$autoTop = New-Object System.Windows.Forms.Panel
+$autoTop.Dock = "Top"
+$autoTop.Height = 74
+$tabAuto.Controls.Add($autoTop)
+$lblAutoHint = New-Label "Zaznaczone = wyłączone przy starcie systemu (tak jak w Menedżerze zadań); odznaczenie przywraca autostart. Dotyczy wpisów dla wszystkich użytkowników (HKLM) i konta administratora (HKCU). Zmiany widać po ponownym zalogowaniu." 8 6 870 32 $autoTop
+$lblAutoHint.ForeColor = [System.Drawing.Color]::DimGray
+$btnAutoRefresh = New-Ctl System.Windows.Forms.Button "Odśwież (stan początkowy)" 8 40 170 28 $autoTop
+$btnAutoJunk    = New-Ctl System.Windows.Forms.Button "Zaznacz typowe zbędne" 186 40 170 28 $autoTop
 
 # --- zakladka: Przebieg ---
 $script:LogBox = New-Object System.Windows.Forms.RichTextBox
@@ -908,12 +1672,13 @@ $btnRun.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.Fon
 $btnCancel = New-Ctl System.Windows.Forms.Button "Przerwij" 160 48 90 30 $bottom
 $btnCancel.Enabled = $false
 $btnLogs   = New-Ctl System.Windows.Forms.Button "Folder logów" 258 48 110 30 $bottom
-$chkDry    = New-Check "Tryb testowy (nic nie zmieniaj)" 384 53 240 $bottom $false
+$chkDry    = New-Check "Tryb testowy (nic nie zmieniaj)" 384 53 205 $bottom $false
+$btnReady  = New-Ctl System.Windows.Forms.Button "Sprawdź gotowość" 596 48 140 30 $bottom
 $btnClose  = New-Ctl System.Windows.Forms.Button "Zamknij" 808 48 100 30 $bottom
 $btnClose.Anchor = "Top, Right"
 
 # kontrolki blokowane na czas pracy (zakladka "Przebieg", Przerwij i Folder logow zostaja aktywne)
-$busyControls = @($tabSet, $lvApps, $appsBar, $btnRun, $chkDry)
+$busyControls = @($tabSet, $lvApps, $appsBar, $urBar, $tabUnin, $tabAuto, $btnRun, $btnReady, $chkDry)
 
 # ============================================================
 #  ZDARZENIA
@@ -1030,6 +1795,66 @@ function Enable-ElevatedDrop {
     } catch { }
 }
 
+function Update-UninstallView {
+    $filter = $txtUninFilter.Text.Trim()
+    $script:UninFilling = $true
+    try {
+        $lvUnin.BeginUpdate()
+        $lvUnin.Items.Clear()
+        foreach ($it in $script:UninstallCache) {
+            if ($filter) {
+                $hit = ($it.Name.IndexOf($filter, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                       ($it.Publisher.IndexOf($filter, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+                if (-not $hit) { continue }
+            }
+            $key = "$($it.Kind)|$($it.Name)|$($it.Version)"
+            $item = New-Object System.Windows.Forms.ListViewItem($it.Name)
+            $item.Name = $key
+            [void]$item.SubItems.Add($it.Version)
+            [void]$item.SubItems.Add($it.Publisher)
+            [void]$item.SubItems.Add($it.Size)
+            [void]$item.SubItems.Add($(if ($it.Kind -eq 'Store') { "Aplikacja Sklepu" } else { "Program" }))
+            [void]$item.SubItems.Add($it.Mode)
+            $item.Tag = $it
+            $item.Checked = $script:UninSel.ContainsKey($key)
+            if ($it.IsComponent) { $item.ForeColor = [System.Drawing.Color]::Gray }
+            [void]$lvUnin.Items.Add($item)
+        }
+    } finally {
+        $lvUnin.EndUpdate()
+        $script:UninFilling = $false
+    }
+}
+
+function Update-UninstallList {
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    try {
+        $script:UninstallCache = @(Get-UninstallList ([bool]$chkUninAll.Checked))
+        $script:UninLoaded = $true
+        $keys = @{}
+        foreach ($it in $script:UninstallCache) { $keys["$($it.Kind)|$($it.Name)|$($it.Version)"] = $true }
+        foreach ($k in @($script:UninSel.Keys)) { if (-not $keys.ContainsKey($k)) { $script:UninSel.Remove($k) } }
+    } finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
+    Update-UninstallView
+}
+
+function Update-AutostartList {
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    try {
+        $lvAuto.Items.Clear()
+        foreach ($a in @(Get-AutostartList)) {
+            $item = New-Object System.Windows.Forms.ListViewItem($a.Name)
+            [void]$item.SubItems.Add($a.Command)
+            [void]$item.SubItems.Add($a.Source)
+            [void]$item.SubItems.Add($(if ($a.Disabled) { "wyłączony" } else { "włączony" }))
+            $item.Tag = $a
+            $item.Checked = [bool]$a.Disabled
+            [void]$lvAuto.Items.Add($item)
+        }
+        $script:AutoLoaded = $true
+    } finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
+}
+
 $txtName.Add_TextChanged({
     $n = $txtName.Text.Trim()
     if ($n -eq "" -or $n -eq $env:COMPUTERNAME -or $n -match '^(?!\d+$)[a-zA-Z0-9\-]{1,15}$') {
@@ -1081,6 +1906,44 @@ foreach ($c in @($form, $tabApps, $lvApps)) {
     $c.Add_DragDrop($onDragDrop)
 }
 
+$tabs.Add_SelectedIndexChanged({
+    if ($script:Running) { return }
+    if ($tabs.SelectedTab -eq $tabUnin -and -not $script:UninLoaded) { Update-UninstallList }
+    if ($tabs.SelectedTab -eq $tabAuto -and -not $script:AutoLoaded) { Update-AutostartList }
+})
+
+$lvUnin.Add_ItemChecked({
+    param($sender, $e)
+    if ($script:UninFilling) { return }
+    $k = $e.Item.Name
+    if ($e.Item.Checked) { $script:UninSel[$k] = $true } else { $script:UninSel.Remove($k) }
+})
+$txtUninFilter.Add_TextChanged({ if ($script:UninLoaded) { Update-UninstallView } })
+$chkUninAll.Add_CheckedChanged({ if ($script:UninLoaded) { Update-UninstallList } })
+$btnUninRefresh.Add_Click({ Update-UninstallList })
+$btnUninNone.Add_Click({ $script:UninSel.Clear(); Update-UninstallView })
+$btnUninJunk.Add_Click({
+    if (-not $script:UninLoaded) { Update-UninstallList }
+    foreach ($it in $script:UninstallCache) {
+        $hit = $false
+        if ($it.Kind -eq 'Store') {
+            foreach ($pat in $script:JunkStore) { if ($it.Name -like $pat) { $hit = $true; break } }
+        } elseif ($it.Name -match $script:JunkProgram) { $hit = $true }
+        if ($hit -and -not $it.IsComponent) { $script:UninSel["$($it.Kind)|$($it.Name)|$($it.Version)"] = $true }
+    }
+    Update-UninstallView
+})
+
+$btnAutoRefresh.Add_Click({ Update-AutostartList })
+$btnAutoJunk.Add_Click({
+    if (-not $script:AutoLoaded) { Update-AutostartList }
+    foreach ($item in $lvAuto.Items) {
+        $a = $item.Tag
+        if (("$($a.Name) $($a.Command)") -match '(?i)OneDrive|Teams|Spotify|Skype|Discord|Steam|EpicGamesLauncher|Dropbox|Adobe.*(ARM|Updater|AAM)|MicrosoftEdgeAutoLaunch|Cortana|YourPhone|Phone ?Link') { $item.Checked = $true }
+    }
+})
+
+$btnReady.Add_Click({ Invoke-Readiness })
 $btnRun.Add_Click({ Start-Setup })
 $btnCancel.Add_Click({
     $script:Cancel = $true
@@ -1107,6 +1970,7 @@ $form.Add_Shown({
     }
     Update-AppList $true
     Enable-ElevatedDrop
+    if ($Resume) { Invoke-Resume }
 })
 
 try {

@@ -56,20 +56,24 @@ Folder `files\` musi leżeć obok `Start-Firmowy.bat` (nie przenoś plików osob
 | Czyszczenie przed instalacją | Usunięcie McAfee (Antivirus, WebAdvisor + foldery) oraz starego Office oficjalnym narzędziem SaRA |
 | Dodatkowe ustawienia | Punkt przywracania systemu, strefa czasowa + synchronizacja czasu, widoczne rozszerzenia plików i ukryte pliki, ikona „Ten komputer” na pulpicie |
 | Opcje instalacji | Pomijanie już zainstalowanych aplikacji, **weryfikacja w rejestrze po instalacji**, **sprawdzanie sum SHA256** instalatorów, opcjonalny klucz aktywacyjny ESET |
-| Dodatkowe funkcje | Wyłączenie reklam i sugestii (Start, ekran blokady), usunięcie zbędnych aplikacji Windows, region i język pl-PL, skróty na pulpicie, strona startowa Chrome |
+| Dodatkowe funkcje | Wyłączenie reklam i sugestii, **bez pytań o opinię i podpowiedzi**, region i język pl-PL, skróty na pulpicie, strona startowa Chrome |
 | Sprzątanie | Czyszczenie plików tymczasowych i koszyka, usunięcie zainstalowanych instalatorów z lokalnego folderu, kopia logu na pendrive |
-| Na koniec | Instalacja aktualizacji Windows, otwarcie Windows Update, przywrócenie ExecutionPolicy (Restricted) |
+| Na koniec | Instalacja aktualizacji Windows (z opcją **dokończenia po restarcie**), otwarcie Windows Update, przywrócenie ExecutionPolicy (Restricted) |
 
 #### Szczegóły dodatkowych funkcji
 
 - **Reklamy i sugestie** — wyłącza „sugerowane aplikacje” w Start, reklamy na ekranie blokady, identyfikator reklamowy i automatyczną instalację aplikacji promowanych (ustawienia bieżącego użytkownika).
-- **Zbędne aplikacje Windows** (domyślnie wyłączone) — usuwa m.in. Xbox, Solitaire, Bing News/Pogoda, Skype, Clipchamp, Teams (konsumencki), Zune, 3D Builder, Mixed Reality, gry promowane (Candy Crush itp.). Nie rusza Sklepu, Kalkulatora, Zdjęć ani Notatnika.
+- **Bez pytań o opinię i podpowiedzi** — częstotliwość opinii = nigdy, bez Centrum opinii, Spotlight i porad Windows oraz ekranu «dokończ konfigurację urządzenia» (ustawienia bieżącego użytkownika; **telemetria nie jest zmieniana**).
 - **Region i język** (domyślnie wyłączone) — format pl-PL, lokalizacja Polska, klawiatura polska programisty. Zastępuje listę języków użytkownika; pełny efekt po restarcie.
 - **Skróty na pulpicie** — dla wszystkich użytkowników: Chrome, Word, Excel, Outlook, Adobe Reader (tylko dla programów, które są zainstalowane).
 - **Chrome** (domyślnie wyłączone) — ustawia stronę startową przez zasady Chrome Enterprise w rejestrze (Chrome pokaże „zarządzane przez organizację”).
 - **Aktualizacje Windows** (domyślnie wyłączone) — wyszukuje, pobiera i instaluje aktualizacje przez wbudowane API Windows Update (bez dodatkowych modułów). Może trwać długo; nie da się go przerwać w trakcie.
 - **Sprzątanie instalatorów** — usuwa tylko te pliki, które zostały zainstalowane w tym uruchomieniu, i tylko z lokalnego dysku (nigdy z pendrive'a ani udziału sieciowego).
 - **Kopia logu** — zapisuje log w `PrepareWorkstation-logs\` na pendrive (najpierw na tym, z którego użyto instalatorów).
+
+### Sprawdź gotowość (przycisk na dole)
+
+Przed instalacją sprawdza: wersję Windows (Home nie dołączy do domeny), czy komputer jest w domenie, instalatory, internet, zasilacz i stan baterii, wolne miejsce, zdrowie dysków, oczekujący restart, **inny antywirus** (konflikt z ESET), aktywację Windows, poprzednie przygotowanie komputera oraz dostępność serwera UrBackup. Błędy są też pokazywane w oknie potwierdzenia przed startem.
 
 ### Zakładka „Aplikacje”
 
@@ -85,6 +89,19 @@ Program dopasowuje pliki po nazwie z `apps.json` (wielkość liter nie ma znacze
 
 > Windows domyślnie blokuje przeciąganie z zwykłego Eksploratora do okna uruchomionego jako Administrator. Program próbuje to obejść, ale jeśli przeciąganie nie działa (ikona zakazu), użyj **Dodaj pliki...** albo **Znajdź na pendrive**.
 
+### Zakładka „Odinstaluj”
+
+Lista programów jak w **Ustawienia → Aplikacje**: programy z rejestru (64/32 bit, także użytkownika) i aplikacje Sklepu. Wyszukiwarka, kolumny: wersja, wydawca, rozmiar, typ, tryb. Zaznaczone pozycje są odinstalowywane **przed instalacją** nowych programów.
+
+- Domyślnie ukryte są aktualizacje (KB), komponenty systemowe, pakiety VC++ i .NET Runtime oraz chronione aplikacje Sklepu (Sklep, Zabezpieczenia Windows itp.). Przełącznik **Pokaż także komponenty i aktualizacje** je odsłania.
+- Tryb: `cicha (MSI)` i `cicha` działają bez okien; przy `widoczna` program uruchamia zwykły deinstalator i czeka, aż go dokończysz (nie zgaduje przełączników).
+- **Zaznacz typowe zbędne** zaznacza znane śmieci: Xbox, Solitaire, Bing, Skype, Clipchamp, gry promowane, a z programów m.in. McAfee, Norton, WildTangent, narzędzia OEM Dell/HP/Lenovo.
+- **Sklep: usuń też dla nowych użytkowników** — aplikacja nie wróci na nowych kontach.
+
+### Zakładka „Autostart”
+
+Programy uruchamiane z Windows (klucze Run i foldery Autostart). Zaznaczone = **wyłączone** przy starcie, tak jak w Menedżerze zadań (nic nie jest usuwane); odznaczenie przywraca. Dotyczy wpisów wszystkich użytkowników (HKLM) i konta administratora (HKCU). **Zaznacz typowe zbędne** wybiera m.in. OneDrive, Teams, Spotify, Skype, Discord.
+
 ### Zakładka „Przebieg”
 
 Kolorowy log na żywo. Ten sam log trafia do pliku w `C:\ProgramData\PrepareWorkstation\logs\` (przycisk **Folder logów**).
@@ -95,6 +112,16 @@ Kolorowy log na żywo. Ten sam log trafia do pliku w `C:\ProgramData\PrepareWork
 - **Przerwij** — kończy bieżący krok i zatrzymuje resztę (instalatora w połowie nie ubija).
 - **Tryb testowy** — symulacja: pokazuje co by się stało, niczego nie zmienia ani nie instaluje.
 - Na końcu: podsumowanie (OK / pominięte / błędy) i pytanie o restart, jeśli jest potrzebny.
+
+---
+
+## Po przygotowaniu: lista „do zrobienia”, restart, znacznik
+
+- **Lista do zrobienia ręcznie** — na końcu program zapisuje plik `DO-ZROBIENIA-<komputer>-<data>.txt` w **folderze z instalatorami** (gdy nie da się tam zapisać — w `C:\ProgramData\PrepareWorkstation\logs\`) i wypisuje ją w logu. Zawiera: dołączenie do domeny, logowanie do Office, aktywację ESET (gdy bez klucza), **ID AnyDesk** odczytane z programu, klienta UrBackup do dodania na serwerze, aplikacje z błędem lub bez pliku, aktualizacje do powtórzenia i restart.
+- **Serwer UrBackup** (zakładka Aplikacje, pole „Serwer UrBackup (adres IP)”) — program sprawdza, czy serwer odpowiada (port 55414), i dopisuje do listy instrukcję z IP i nazwą komputera. Adresu serwera **nie wpisuje do klienta**: nie ma zweryfikowanej metody cichej konfiguracji klienta Windows (w sieci lokalnej serwer zwykle sam wykrywa klienta).
+- **Wznawianie po restarcie** — jeśli aktualizacje Windows wymagają restartu, a zostały jeszcze kroki, program pyta, czy zrestartować i dokończyć. Zapisuje stan w `C:\ProgramData\PrepareWorkstation\resume.json` (bez klucza ESET) i rejestruje zadanie harmonogramu `PrepareWorkstation-Resume` (przy logowaniu, z uprawnieniami administratora). Po zalogowaniu pyta o potwierdzenie, usuwa zadanie i dokańcza plan. Działa dla konta z grupy Administratorzy. Dla wersji `.exe` wymaga, by aplikacja przyjmowała parametr `-Resume`.
+- **Znacznik „komputer przygotowany”** — po przebiegu zapisuje wersję programu, datę i listę wykonanych kroków w `HKLM\SOFTWARE\PrepareWorkstation`. Przy kolejnym uruchomieniu ostrzega, że komputer był już przygotowany.
+- **Weryfikacja usług** — dla aplikacji z polem `service` w `apps.json` (ESET: `ekrn`, AnyDesk, UrBackup) program po instalacji sprawdza, czy usługa działa.
 
 ---
 
@@ -143,6 +170,7 @@ Nie trzeba już edytować skryptu. Dopisz obiekt do `script\files\apps.json` (al
 | `default` | czy zaznaczać domyślnie |
 | `warn32on64` | (opcjonalnie) ostrzeżenie dla instalatora 32-bit na systemie 64-bit |
 | `sha256` | (opcjonalnie) suma kontrolna instalatora — patrz niżej |
+| `service` | (opcjonalnie) nazwa usługi Windows, którą program sprawdza po instalacji (czeka do 20 s, aż będzie uruchomiona) |
 
 ### Sumy SHA256 instalatorów
 

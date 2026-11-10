@@ -56,20 +56,24 @@ Keep the `files\` folder next to `Start-Firmowy.bat`.
 | Pre-install cleanup | Removes McAfee (Antivirus, WebAdvisor + folders) and old Office via Microsoft's official SaRA tool |
 | Extra settings | System restore point, time zone + time sync, show file extensions and hidden files, "This PC" desktop icon |
 | Install options | Skip already installed apps, **registry verification after install**, **SHA256 check** of installers, optional ESET activation key |
-| Extra features | Disable ads and suggestions (Start, lock screen), remove unneeded Windows apps, pl-PL region and language, desktop shortcuts, Chrome start page |
+| Extra features | Disable ads and suggestions, **no feedback prompts and tips**, pl-PL region and language, desktop shortcuts, Chrome start page |
 | Cleanup | Clean temp files and recycle bin, delete installed installers from the local folder, copy the log to a USB stick |
-| At the end | Install Windows updates, open Windows Update, restore ExecutionPolicy (Restricted) |
+| At the end | Install Windows updates (with **resume after restart**), open Windows Update, restore ExecutionPolicy (Restricted) |
 
 #### Extra features in detail
 
 - **Ads and suggestions** — turns off suggested apps in Start, lock-screen ads, the advertising ID and automatic installs of promoted apps (current user).
-- **Unneeded Windows apps** (off by default) — removes Xbox, Solitaire, Bing News/Weather, Skype, Clipchamp, consumer Teams, Zune, 3D Builder, Mixed Reality, promoted games (Candy Crush etc.). Store, Calculator, Photos and Notepad are untouched.
+- **No feedback prompts and tips** — feedback frequency = never, no Feedback Hub notifications, Spotlight, Windows tips or the "finish setting up your device" screen (current user; **telemetry is not changed**).
 - **Region and language** (off by default) — pl-PL format, Poland location, Polish Programmers keyboard. Replaces the user's language list; full effect after a reboot.
 - **Desktop shortcuts** — for all users: Chrome, Word, Excel, Outlook, Adobe Reader (only for installed programs).
 - **Chrome** (off by default) — sets the start page via Chrome Enterprise policy in the registry (Chrome will show "managed by your organization").
 - **Windows updates** (off by default) — searches, downloads and installs updates through the built-in Windows Update API (no extra modules). Can take long; cannot be cancelled midway.
 - **Installer cleanup** — deletes only the files installed in this run, and only from a local drive (never from a USB stick or network share).
 - **Log copy** — writes the log to `PrepareWorkstation-logs\` on a USB stick (preferring the one the installers came from).
+
+### Readiness check (button at the bottom)
+
+Before installing it checks: Windows edition (Home cannot join a domain), domain membership, installers, internet, power and battery health, free space, disk health, pending reboot, **other antivirus** (conflicts with ESET), Windows activation, a previous preparation of this PC, and UrBackup server reachability. Errors are also shown in the confirmation dialog before starting.
 
 ### "Aplikacje" (Applications) tab
 
@@ -85,6 +89,19 @@ Files are matched by name against `apps.json` (case-insensitive), checked, and u
 
 > Windows blocks dragging from a normal Explorer into a window running as Administrator. The program tries to work around this; if dragging shows a "no" cursor, use **Dodaj pliki...** or **Znajdź na pendrive**.
 
+### "Odinstaluj" (Uninstall) tab
+
+A list of programs like **Settings → Apps**: registry programs (64/32-bit, including per-user) and Store apps. Search box; columns: version, publisher, size, type, mode. Checked items are uninstalled **before** the new programs are installed.
+
+- Updates (KB), system components, VC++/.NET runtimes and protected Store apps (Store, Windows Security, ...) are hidden by default; **Pokaż także komponenty i aktualizacje** shows them.
+- Mode: `cicha (MSI)` and `cicha` run without windows; for `widoczna` the program runs the regular uninstaller and waits until you finish it (it never guesses switches).
+- **Zaznacz typowe zbędne** selects known junk: Xbox, Solitaire, Bing, Skype, Clipchamp, promoted games, and among programs McAfee, Norton, WildTangent, Dell/HP/Lenovo OEM tools.
+- **Sklep: usuń też dla nowych użytkowników** — the app will not come back on new accounts.
+
+### "Autostart" tab
+
+Programs launched with Windows (Run keys and Startup folders). Checked = **disabled** at startup, like in Task Manager (nothing is deleted); unchecking restores it. Covers all-users (HKLM) entries and the administrator account (HKCU). **Zaznacz typowe zbędne** picks OneDrive, Teams, Spotify, Skype, Discord, etc.
+
 ### "Przebieg" (Progress) tab
 
 Live colour-coded log, also written to `C:\ProgramData\PrepareWorkstation\logs\` (the **Folder logów** button opens it).
@@ -95,6 +112,16 @@ Live colour-coded log, also written to `C:\ProgramData\PrepareWorkstation\logs\`
 - **Przerwij** (Cancel) — finishes the current step and stops (never kills an installer mid-way).
 - **Tryb testowy** (Dry run) — simulation only: shows what would happen, changes nothing.
 - At the end: a summary (OK / skipped / errors) and a reboot prompt if needed.
+
+---
+
+## After preparation: to-do list, restart, marker
+
+- **Manual to-do list** — at the end the program writes `DO-ZROBIENIA-<computer>-<date>.txt` to the **installers folder** (or `C:\ProgramData\PrepareWorkstation\logs\` if it is not writable) and prints it to the log. It contains: join the domain, sign in to Office, activate ESET (if no key was given), the **AnyDesk ID** read from the program, the UrBackup client to add on the server, apps that failed or had no file, updates to repeat, and a restart.
+- **UrBackup server** (Applications tab, "Serwer UrBackup (adres IP)" field) — the program checks that the server answers (port 55414) and adds instructions with the IP and computer name to the list. It does **not** write the address into the client: there is no verified silent-configuration method for the Windows client (on a LAN the server usually discovers the client itself).
+- **Resume after restart** — if Windows updates require a restart and steps remain, the program asks whether to restart and finish. It saves state to `C:\ProgramData\PrepareWorkstation\resume.json` (without the ESET key) and registers the scheduled task `PrepareWorkstation-Resume` (at logon, elevated). After sign-in it asks for confirmation, removes the task and finishes the plan. Works for accounts in the Administrators group. For the `.exe`, the app must accept the `-Resume` parameter.
+- **"Computer prepared" marker** — after a run it stores the program version, date and the list of completed steps in `HKLM\SOFTWARE\PrepareWorkstation`. On the next run it warns that the computer was already prepared.
+- **Service verification** — for apps with a `service` field in `apps.json` (ESET: `ekrn`, AnyDesk, UrBackup) the program checks after install that the service is running.
 
 ---
 
@@ -143,6 +170,7 @@ No script editing needed. Add an object to `script\files\apps.json` (or click **
 | `default` | whether it is checked by default |
 | `warn32on64` | (optional) warn for 32-bit installers on 64-bit systems |
 | `sha256` | (optional) installer checksum — see below |
+| `service` | (optional) Windows service name checked after install (waits up to 20 s for it to run) |
 
 ### Installer SHA256 checksums
 
