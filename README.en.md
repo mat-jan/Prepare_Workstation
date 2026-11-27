@@ -53,7 +53,7 @@ Keep the `files\` folder next to `Start-Firmowy.bat`.
 | Installers folder | Path to the installers (Browse button); the application list refreshes on change |
 | Computer name | Live validation (letters, digits, hyphens, max 15 chars, not digits only); applied after reboot |
 | Power | High Performance plan (created from template if missing), screen/sleep = never, hibernation off, screensaver off |
-| Pre-install cleanup | Removes McAfee (Antivirus, WebAdvisor + folders) and old Office via Microsoft's official SaRA tool |
+| Pre-install cleanup | Removes McAfee (Antivirus, WebAdvisor + folders) and old Office (removed **automatically, no clicking** — Click-to-Run and MSI; if it fails the log points to the SaRA tool) |
 | Extra settings | System restore point, time zone + time sync, show file extensions and hidden files, "This PC" desktop icon |
 | Install options | Skip already installed apps, **registry verification after install**, **SHA256 check** of installers, optional ESET activation key |
 | Extra features | Disable ads and suggestions, **no feedback prompts and tips**, pl-PL region and language, desktop shortcuts, Chrome start page |

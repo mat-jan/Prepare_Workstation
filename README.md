@@ -53,12 +53,12 @@ Folder `files\` musi leżeć obok `Start-Firmowy.bat` (nie przenoś plików osob
 | Folder z instalatorami | Ścieżka do folderu z plikami (przycisk Przeglądaj); lista aplikacji odświeża się po zmianie |
 | Nazwa komputera | Walidacja na żywo (litery, cyfry, myślniki, max 15 znaków, nie same cyfry); zmiana po restarcie |
 | Zasilanie | Plan Wysoka wydajność (jeśli go nie ma na sprzęcie — tworzony z szablonu), ekran/uśpienie = nigdy, hibernacja off, wygaszacz off |
-| Czyszczenie przed instalacją | Usunięcie McAfee (Antivirus, WebAdvisor + foldery) oraz starego Office oficjalnym narzędziem SaRA |
+| Czyszczenie przed instalacją | Usunięcie McAfee (Antivirus, WebAdvisor + foldery) oraz starego Office (usuwany **automatycznie, bez klikania** — Click-to-Run i MSI; w razie niepowodzenia w logu jest wskazówka z narzędziem SaRA) |
 | Dodatkowe ustawienia | Punkt przywracania systemu, strefa czasowa + synchronizacja czasu, widoczne rozszerzenia plików i ukryte pliki, ikona „Ten komputer” na pulpicie |
 | Opcje instalacji | Pomijanie już zainstalowanych aplikacji, **weryfikacja w rejestrze po instalacji**, **sprawdzanie sum SHA256** instalatorów, opcjonalny klucz aktywacyjny ESET |
 | Dodatkowe funkcje | Wyłączenie reklam i sugestii, **bez pytań o opinię i podpowiedzi**, region i język pl-PL, skróty na pulpicie, strona startowa Chrome |
 | Sprzątanie | Czyszczenie plików tymczasowych i koszyka, usunięcie zainstalowanych instalatorów z lokalnego folderu, kopia logu na pendrive |
-| Na koniec | Instalacja aktualizacji Windows (z opcją **dokończenia po restarcie**), otwarcie Windows Update, przywrócenie ExecutionPolicy (Restricted) |
+| Na koniec | Instalacja aktualizacji Windows (opcjonalnie **wszystkich, także opcjonalnych, bez preview**; z opcją **dokończenia po restarcie**; restart tylko po Twojej zgodzie), otwarcie Windows Update, przywrócenie ExecutionPolicy (Restricted) |
 
 #### Szczegóły dodatkowych funkcji
 
@@ -67,7 +67,7 @@ Folder `files\` musi leżeć obok `Start-Firmowy.bat` (nie przenoś plików osob
 - **Region i język** (domyślnie wyłączone) — format pl-PL, lokalizacja Polska, klawiatura polska programisty. Zastępuje listę języków użytkownika; pełny efekt po restarcie.
 - **Skróty na pulpicie** — dla wszystkich użytkowników: Chrome, Word, Excel, Outlook, Adobe Reader (tylko dla programów, które są zainstalowane).
 - **Chrome** (domyślnie wyłączone) — ustawia stronę startową przez zasady Chrome Enterprise w rejestrze (Chrome pokaże „zarządzane przez organizację”).
-- **Aktualizacje Windows** (domyślnie wyłączone) — wyszukuje, pobiera i instaluje aktualizacje przez wbudowane API Windows Update (bez dodatkowych modułów). Może trwać długo; nie da się go przerwać w trakcie.
+- **Aktualizacje Windows** (domyślnie wyłączone) — wyszukuje, pobiera i instaluje aktualizacje przez wbudowane API Windows Update (bez dodatkowych modułów). Może trwać długo; nie da się go przerwać w trakcie. Opcja **„WSZYSTKIE, także opcjonalne”** dodaje sterowniki i aktualizacje opcjonalne, zawsze pomijając wersje zapoznawcze (preview). Restart komputera następuje wyłącznie po kliknięciu „Tak” (domyślnie zaznaczone „Nie”).
 - **Sprzątanie instalatorów** — usuwa tylko te pliki, które zostały zainstalowane w tym uruchomieniu, i tylko z lokalnego dysku (nigdy z pendrive'a ani udziału sieciowego).
 - **Kopia logu** — zapisuje log w `PrepareWorkstation-logs\` na pendrive (najpierw na tym, z którego użyto instalatorów).
 

@@ -53,12 +53,14 @@ function Show-Msg {
         [string]$Text,
         [string]$Title   = "Prepare Workstation",
         [string]$Buttons = "OK",
-        [string]$Icon    = "Information"
+        [string]$Icon    = "Information",
+        [string]$Default = "Button1"
     )
     return [System.Windows.Forms.MessageBox]::Show(
         $Text, $Title,
         [System.Windows.Forms.MessageBoxButtons]::$Buttons,
-        [System.Windows.Forms.MessageBoxIcon]::$Icon)
+        [System.Windows.Forms.MessageBoxIcon]::$Icon,
+        [System.Windows.Forms.MessageBoxDefaultButton]::$Default)
 }
 
 # --- Uprawnienia administratora ---
@@ -241,16 +243,54 @@ function Step-McAfee {
 }
 
 function Step-Office {
-    $found = @(Get-InstalledApps | Where-Object { $_.DisplayName -match "Microsoft 365|Microsoft Office|Office 16|Office 15|Office 14" })
-    $c2r = Test-Path "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
+    $pat = "Microsoft 365|Microsoft Office|Office 16|Office 15|Office 14"
+    $c2rKey = "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration"
+    $found = @(Get-InstalledApps | Where-Object { $_.DisplayName -match $pat })
+    $c2r = Test-Path $c2rKey
     if ($found.Count -eq 0 -and -not $c2r) { Set-Outcome "Stary Office" "SKIP" "nie znaleziono"; return }
-    if (Test-Dry "Stary Office" "otwarcie narzędzia SaRA") { return }
+    if (Test-Dry "Stary Office" "automatyczne usuniecie: $(($found.DisplayName | Select-Object -Unique) -join ', ')") { return }
 
-    Start-Process "https://aka.ms/SaRA-officeUninstallFromPC"
-    [void](Show-Msg ("Otwarto oficjalne narzędzie Microsoft (SaRA) do usunięcia Office.`n`n" +
-                     "Postępuj zgodnie z instrukcjami na stronie. Gdy Office zostanie odinstalowany, kliknij OK.") `
-                    "Usuwanie Office" "OK" "Information")
-    Set-Outcome "Stary Office" "OK" "procedura SaRA zakończona (potwierdzona ręcznie)"
+    Write-Log "Usuwam Office automatycznie (bez klikania) - to może potrwać kilka minut..."
+    # zamykamy otwarte programy Office, zeby nie blokowaly deinstalacji
+    Get-Process WINWORD, EXCEL, POWERPNT, OUTLOOK, ONENOTE, MSACCESS, MSPUB, lync, Teams -ErrorAction SilentlyContinue |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+
+    # 1) Office Click-to-Run (Microsoft 365 / Office 2016+)
+    if ($c2r) {
+        $cfg = Get-ItemProperty $c2rKey -ErrorAction SilentlyContinue
+        $exe = Join-Path ${env:CommonProgramFiles} "Microsoft Shared\ClickToRun\OfficeClickToRun.exe"
+        if (-not (Test-Path $exe)) { $exe = Join-Path ${env:CommonProgramFiles(x86)} "Microsoft Shared\ClickToRun\OfficeClickToRun.exe" }
+        $ids = @()
+        if ($cfg -and $cfg.ProductReleaseIds) { $ids = @(([string]$cfg.ProductReleaseIds) -split ',' | Where-Object { $_ }) }
+        if ((Test-Path $exe) -and $ids.Count -gt 0) {
+            $lang = if ($cfg.ClientCulture) { [string]$cfg.ClientCulture } else { "en-us" }
+            foreach ($id in $ids) {
+                Write-Log "Odinstalowuję (Click-to-Run): $id"
+                $code = Invoke-External $exe "scenario=install scenariosubtype=ARP sourcetype=None productstoremove=$id.16_$($lang)_x-none culture=$lang version.16=16.0 DisplayLevel=False forceappshutdown=True"
+                Write-Log "OfficeClickToRun $id - kod: $code" "INFO"
+            }
+        }
+    }
+
+    # 2) Office instalowany przez MSI (2010/2013/2016 MSI) - po wpisach z listy programow
+    $msi = @(Get-InstalledApps | Where-Object { $_.DisplayName -match $pat -and $_.UninstallString -match '(?i)msiexec' })
+    foreach ($app in $msi) {
+        $guid = [regex]::Match($app.UninstallString, '\{[0-9A-Fa-f\-]+\}').Value
+        if (-not $guid) { continue }
+        Write-Log "Odinstalowuję (MSI): $($app.DisplayName)"
+        $code = Invoke-External "msiexec.exe" "/x $guid /qn /norestart"
+        if ($code -eq 3010 -or $code -eq 1641) { $script:RebootNeeded = $true }
+    }
+
+    # sprawdzenie wyniku
+    $left = @(Get-InstalledApps | Where-Object { $_.DisplayName -match $pat })
+    $c2rLeft = Test-Path $c2rKey
+    if ($left.Count -eq 0 -and -not $c2rLeft) {
+        Set-Outcome "Stary Office" "OK" "usunięty automatycznie"
+    } else {
+        $script:RebootNeeded = $true
+        Set-Outcome "Stary Office" "ERR" "nie wszystko usunięto automatycznie (pozostało: $((@($left.DisplayName) | Select-Object -Unique) -join ', ')) - użyj narzędzia SaRA: https://aka.ms/SaRA-officeUninstallFromPC"
+    }
 }
 
 function Step-App {
@@ -438,18 +478,23 @@ function Step-ChromePolicy {
 # Pobiera i instaluje aktualizacje przez wbudowane API Windows Update (bez dodatkowych modułow).
 # Praca w osobnym watku, zeby okno nie zawieszalo sie na czas wyszukiwania i instalacji.
 function Step-WindowsUpdateInstall {
-    if (Test-Dry "Aktualizacje Windows" "wyszukanie i instalacja") { return }
+    $all = [bool]$script:Opts.WuAll
+    if (Test-Dry "Aktualizacje Windows" $(if ($all) { "wyszukanie i instalacja (z opcjonalnymi)" } else { "wyszukanie i instalacja" })) { return }
     Write-Log "Szukam i instaluję aktualizacje Windows - to może potrwać kilka do kilkunastu minut (nie można przerwać w trakcie)..."
 
     $sb = {
+        param([bool]$All)
         $out = @{ Found = 0; Installed = 0; Failed = 0; Titles = @(); Reboot = $false; Error = $null }
         try {
             $session  = New-Object -ComObject Microsoft.Update.Session
             $searcher = $session.CreateUpdateSearcher()
-            $found    = $searcher.Search("IsInstalled=0 and Type='Software' and IsHidden=0")
+            # tryb "wszystkie": takze opcjonalne (sterowniki, .NET itp.); zawsze bez wersji zapoznawczych (preview)
+            $crit     = if ($All) { "IsInstalled=0 and IsHidden=0" } else { "IsInstalled=0 and Type='Software' and IsHidden=0" }
+            $found    = $searcher.Search($crit)
             $coll     = New-Object -ComObject Microsoft.Update.UpdateColl
             foreach ($u in $found.Updates) {
                 if ($u.InstallationBehavior.CanRequestUserInput) { continue }
+                if ($u.IsBeta -or $u.Title -match '(?i)preview|podgl[aą]d|zapoznawcz|insider') { continue }
                 if (-not $u.EulaAccepted) { $u.AcceptEula() }
                 [void]$coll.Add($u)
                 $out.Titles += $u.Title
@@ -469,7 +514,7 @@ function Step-WindowsUpdateInstall {
     }
 
     $ps = [powershell]::Create()
-    [void]$ps.AddScript($sb)
+    [void]$ps.AddScript($sb).AddArgument($all)
     $async = $ps.BeginInvoke()
     $t0 = Get-Date
     while (-not $async.IsCompleted) {
@@ -1241,8 +1286,9 @@ function Show-Summary {
 
     if ($script:RebootNeeded -and -not $script:DryRun) {
         $text += "`n`nWymagany restart komputera. Uruchomić ponownie teraz?"
-        $r = Show-Msg $text "Prepare Workstation - koniec" "YesNo" $icon
+        $r = Show-Msg $text "Prepare Workstation - koniec" "YesNo" $icon "Button2"
         if ($r -eq 'Yes') { Restart-Computer -Force }
+        else { Write-Log "Restart pominięty na prośbę użytkownika - pamiętaj o ręcznym restarcie." "SKIP" }
     } else {
         [void](Show-Msg $text "Prepare Workstation - koniec" "OK" $icon)
     }
@@ -1287,7 +1333,7 @@ function Invoke-Plan {
                 $ans = Show-Msg ("Aktualizacje Windows wymagają restartu.`n`nPozostało kroków: $($remaining.Count).`n`n" +
                                  "TAK - zrestartuj teraz; po zalogowaniu (konto administratora) program dokończy resztę.`n" +
                                  "NIE - kontynuuj bez restartu.") `
-                                "Restart po aktualizacjach" "YesNo" "Question"
+                                "Restart po aktualizacjach" "YesNo" "Question" "Button2"
                 if ($ans -eq 'Yes') {
                     try {
                         Save-ResumeState $remaining
@@ -1367,6 +1413,7 @@ function Start-Setup {
     $o.ChromeUrl       = $txtChrome.Text.Trim()
     $o.CopyLog         = $chkCopyLog.Checked
     $o.UrServer        = $ur
+    $o.WuAll           = $chkWUAll.Checked
     $o.UninProvisioned = $chkUninProv.Checked
     $script:Opts       = $o
     $script:DryRun     = $chkDry.Checked
@@ -1404,7 +1451,7 @@ function Start-Setup {
     if ($chkLang.Checked)      { $plan += [pscustomobject]@{ Name = "Region i język: polski";    Fn = "Step-Language";     Arg = $null } }
     if ($chkShortcuts.Checked) { $plan += [pscustomobject]@{ Name = "Skróty na pulpicie";        Fn = "Step-Shortcuts";    Arg = $null } }
     if ($chkChrome.Checked)    { $plan += [pscustomobject]@{ Name = "Chrome - strona startowa";  Fn = "Step-ChromePolicy"; Arg = $null } }
-    if ($chkWUInstall.Checked) { $plan += [pscustomobject]@{ Name = "Aktualizacje Windows";      Fn = "Step-WindowsUpdateInstall"; Arg = $null } }
+    if ($chkWUInstall.Checked -or $chkWUAll.Checked) { $plan += [pscustomobject]@{ Name = "Aktualizacje Windows";      Fn = "Step-WindowsUpdateInstall"; Arg = $null } }
     if ($chkCleanInst.Checked) { $plan += [pscustomobject]@{ Name = "Sprzątanie instalatorów";   Fn = "Step-CleanInstallers"; Arg = $null } }
     if ($chkCleanTemp.Checked) { $plan += [pscustomobject]@{ Name = "Sprzątanie plików tymczasowych"; Fn = "Step-CleanTemp"; Arg = $null } }
     if ($chkPolicy.Checked)  { $plan += [pscustomobject]@{ Name = "Przywrócenie ExecutionPolicy"; Fn = "Step-Policy";     Arg = $null } }
@@ -1512,7 +1559,7 @@ $chkSaver = New-Check "Wyłącz wygaszacz ekranu"               12 94 396 $gPowe
 
 $gClean = New-Group "Czyszczenie przed instalacją" 12 308 420 80 $tabSet
 $chkMcAfee = New-Check "Usuń McAfee (Antivirus, WebAdvisor)"                 12 22 396 $gClean
-$chkOffice = New-Check "Usuń stary Office (oficjalne narzędzie SaRA)"       12 46 396 $gClean
+$chkOffice = New-Check "Usuń stary Office (automatycznie, bez klikania)"       12 46 396 $gClean
 
 # --- zakladka: Ustawienia, prawa kolumna ---
 $gExtra = New-Group "Dodatkowe ustawienia" 444 10 440 150 $tabSet
@@ -1553,10 +1600,11 @@ $chkCleanTemp = New-Check "Wyczyść pliki tymczasowe i koszyk na koniec"       
 $chkCleanInst = New-Check "Usuń zainstalowane instalatory z folderu (tylko dysk lokalny)" 12 46 396 $gTidy $false
 $chkCopyLog   = New-Check "Skopiuj log na pendrive po zakończeniu"                       12 70 396 $gTidy $false
 
-$gEnd = New-Group "Na koniec" 12 508 420 104 $tabSet
+$gEnd = New-Group "Na koniec" 12 508 420 130 $tabSet
 $chkWUInstall = New-Check "Zainstaluj aktualizacje Windows (może potrwać długo)" 12 22 396 $gEnd $false
-$chkWU        = New-Check "Otwórz Windows Update"                                12 46 396 $gEnd $false
-$chkPolicy    = New-Check "Przywróć ExecutionPolicy (Restricted)"                12 70 396 $gEnd
+$chkWUAll     = New-Check "Zainstaluj WSZYSTKIE aktualizacje, także opcjonalne (bez preview)" 12 46 396 $gEnd $false
+$chkWU        = New-Check "Otwórz Windows Update"                                12 70 396 $gEnd $false
+$chkPolicy    = New-Check "Przywróć ExecutionPolicy (Restricted)"                12 94 396 $gEnd
 
 # --- zakladka: Aplikacje ---
 $lvApps = New-Object System.Windows.Forms.ListView
